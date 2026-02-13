@@ -1,0 +1,5 @@
+{
+  "name": "RootID",
+  "description": "RootID is an advanced AI-powered autonomous OSINT validator for professional background verification. It cross-references candidate claims with public digital footprints using Gemini Search Grounding.",
+  "requestFramePermissions": []
+}
