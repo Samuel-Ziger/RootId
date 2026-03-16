@@ -4,10 +4,15 @@ import { MainLayout } from './components/Layout';
 import { AnalysisForm } from './components/AnalysisForm';
 import { ReportView } from './components/ReportView';
 import { LoadingScreen } from './components/LoadingScreen';
-import { AppState, CandidateData } from './types';
+import { AppState, CandidateDataInput, AcheUmVeteranoCandidato } from './types';
 import { performOSINTAnalysis } from './services/geminiService';
 
-const App: React.FC = () => {
+interface AppProps {
+  /** Candidato do Ache Um Veterano: quando informado, o formulário é pré-preenchido e a análise usa contexto enriquecido */
+  candidato?: AcheUmVeteranoCandidato | null;
+}
+
+const App: React.FC<AppProps> = ({ candidato }) => {
   const [state, setState] = useState<AppState>({
     isAnalyzing: false,
     result: null,
@@ -32,7 +37,7 @@ const App: React.FC = () => {
     return () => clearInterval(timer);
   }, [state.cooldownSeconds]);
 
-  const handleStartAnalysis = async (data: CandidateData) => {
+  const handleStartAnalysis = async (data: CandidateDataInput) => {
     if (state.cooldownSeconds > 0) return;
 
     setState({
@@ -53,14 +58,17 @@ const App: React.FC = () => {
         step: 'done'
       });
     } catch (err: any) {
-      const isRateLimit = err.message.includes("Limite de requisições");
-      
+      const msg = err.message || '';
+      const isRateLimit = msg.includes('Limite de requisições') || msg.includes('Limite da API') || msg.includes('Cota da API') || msg.includes('quota') || msg.includes('excedida');
+      const isHighDemand = msg.includes('alta demanda') || msg.includes('tente novamente');
+      const cooldown = isRateLimit || isHighDemand ? 60 : 0;
+
       setState({
         ...state,
         isAnalyzing: false,
-        error: err.message,
+        error: msg,
         step: 'idle',
-        cooldownSeconds: isRateLimit ? 60 : 0 // Inicia 60s se for erro de cota
+        cooldownSeconds: cooldown
       });
     }
   };
@@ -70,23 +78,25 @@ const App: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         {/* Coluna Esquerda - Formulário */}
         <div className="lg:col-span-4 space-y-6 lg:sticky lg:top-24">
-          <div className="mb-2">
-            <h1 className="text-4xl font-extrabold text-white mb-2 tracking-tight">
-              Root<span className="text-blue-500 italic">ID</span>
-            </h1>
-            <p className="text-slate-400 text-sm leading-relaxed">
-              Analista OSINT Autônomo para validação profissional. Localizamos a origem digital de perfis técnicos para garantir contratações seguras.
-            </p>
-          </div>
-          
+          {!candidato && (
+            <div className="mb-2">
+              <h1 className="text-4xl font-extrabold text-gray-900 mb-2 tracking-tight">
+                Ache um Veterano <span style={{ color: '#17752a' }} className="italic">IA</span>
+              </h1>
+              <p className="text-gray-600 text-sm leading-relaxed">
+                Analista OSINT autônomo para validação profissional. Localizamos a origem digital de perfis técnicos para garantir contratações seguras.
+              </p>
+            </div>
+          )}
           <AnalysisForm 
             onAnalyze={handleStartAnalysis} 
             isLoading={state.isAnalyzing}
             cooldownSeconds={state.cooldownSeconds}
+            candidato={candidato}
           />
 
           {state.error && (
-            <div className={`border rounded-lg p-4 flex gap-3 animate-in fade-in zoom-in ${state.cooldownSeconds > 0 ? 'bg-orange-500/10 border-orange-500/50 text-orange-400' : 'bg-red-500/10 border-red-500/50 text-red-400'}`}>
+            <div className={`border rounded-lg p-4 flex gap-3 animate-in fade-in zoom-in ${state.cooldownSeconds > 0 ? 'bg-amber-50 border-amber-300 text-amber-800' : 'bg-red-50 border-red-200 text-red-700'}`}>
               <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
@@ -101,7 +111,7 @@ const App: React.FC = () => {
                 {state.cooldownSeconds === 0 && (
                   <button 
                       onClick={() => setState({...state, error: null})}
-                      className="mt-2 text-white bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/40 transition-colors"
+                      className="mt-2 text-red-700 bg-red-100 px-2 py-1 rounded hover:bg-red-200 transition-colors"
                   >
                       Dispensar
                   </button>
@@ -118,15 +128,15 @@ const App: React.FC = () => {
           ) : state.result ? (
             <ReportView result={state.result} />
           ) : (
-            <div className="h-full border-2 border-dashed border-slate-800 rounded-2xl flex flex-col items-center justify-center p-12 text-center text-slate-500 bg-slate-900/20">
-              <div className="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-6 opacity-40">
-                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="h-full border-2 border-dashed border-gray-300 rounded-2xl flex flex-col items-center justify-center p-12 text-center text-gray-600 bg-gray-50">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6 opacity-60" style={{ backgroundColor: 'rgba(23,117,42,0.2)' }}>
+                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="#17752a">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                 </svg>
               </div>
-              <h3 className="text-lg font-semibold text-slate-300 mb-2">Aguardando Parâmetros</h3>
+              <h3 className="text-lg font-semibold text-gray-800 mb-2">Aguardando Parâmetros</h3>
               <p className="max-w-xs text-sm">
-                Inicie o protocolo RootID fornecendo o nome e cargo do candidato. A IA cuidará de mapear todas as fontes públicas.
+                Forneça o nome e cargo do candidato para iniciar. A IA mapeará todas as fontes públicas.
               </p>
             </div>
           )}

@@ -1,17 +1,29 @@
 
-import React, { useState } from 'react';
-import { CandidateData } from '../types';
+import React, { useState, useEffect } from 'react';
+import { CandidateDataInput, AcheUmVeteranoCandidato } from '../types';
+import { mapCandidatoToRootID } from '../utils/candidateMapper';
 
 interface AnalysisFormProps {
-  onAnalyze: (data: CandidateData) => void;
+  onAnalyze: (data: CandidateDataInput) => void;
   isLoading: boolean;
   cooldownSeconds?: number;
+  /** Candidato do Ache Um Veterano: quando informado, mostra só nome + botão e usa dados do JSON */
+  candidato?: AcheUmVeteranoCandidato | null;
 }
 
-export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading, cooldownSeconds = 0 }) => {
+export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading, cooldownSeconds = 0, candidato }) => {
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
   const [referenceUrls, setReferenceUrls] = useState<string[]>(['']);
+
+  useEffect(() => {
+    if (candidato) {
+      const mapped = mapCandidatoToRootID(candidato);
+      setName(mapped.name);
+      setRole(mapped.role);
+      setReferenceUrls(mapped.referenceUrls.length > 0 ? mapped.referenceUrls : ['']);
+    }
+  }, [candidato]);
 
   const handleAddLink = () => {
     setReferenceUrls([...referenceUrls, '']);
@@ -19,8 +31,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
 
   const handleRemoveLink = (index: number) => {
     if (referenceUrls.length > 1) {
-      const newLinks = referenceUrls.filter((_, i) => i !== index);
-      setReferenceUrls(newLinks);
+      setReferenceUrls(referenceUrls.filter((_, i) => i !== index));
     } else {
       setReferenceUrls(['']);
     }
@@ -32,64 +43,131 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
     setReferenceUrls(newLinks);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmitFromCandidato = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !role || isLoading || cooldownSeconds > 0) return;
-    onAnalyze({ 
-      name, 
-      role, 
-      referenceUrls: referenceUrls.filter(url => url.trim() !== "") 
+    if (!candidato || isLoading || cooldownSeconds > 0) return;
+    const mapped = mapCandidatoToRootID(candidato);
+    onAnalyze({
+      name: mapped.name,
+      role: mapped.role,
+      referenceUrls: mapped.referenceUrls.filter((u) => u && u.trim()),
+      candidato,
     });
   };
 
-  const isButtonDisabled = isLoading || !name || !role || cooldownSeconds > 0;
+  const handleSubmitManual = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name || !role || isLoading || cooldownSeconds > 0) return;
+    onAnalyze({
+      name,
+      role,
+      referenceUrls: referenceUrls.filter((u) => u && u.trim()),
+    });
+  };
 
+  const isCandidatoMode = !!candidato;
+  const isButtonDisabled = isLoading || cooldownSeconds > 0 || (isCandidatoMode ? false : !name || !role);
+
+  // Modo candidato (dados do JSON): só nome + botão
+  if (isCandidatoMode) {
+    const displayName =
+      candidato?.nome || (candidato?.firstname && candidato?.lastname
+        ? `${candidato.firstname} ${candidato.lastname}`
+        : "Candidato");
+
+    return (
+      <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-lg">
+        <form onSubmit={handleSubmitFromCandidato} className="space-y-6">
+          <div>
+            <p className="text-sm text-gray-500 mb-1">Validar perfil de</p>
+            <p className="text-2xl font-bold text-gray-900">{displayName}</p>
+            <p className="text-xs text-gray-400 mt-2">
+              A busca usará nome, links, experiências e demais dados do cadastro.
+            </p>
+          </div>
+          <button
+            type="submit"
+            disabled={isButtonDisabled}
+            className={`w-full font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-all shadow-lg disabled:cursor-not-allowed ${
+              cooldownSeconds > 0 ? "bg-gray-200 text-gray-500 border border-gray-300" : "text-white hover:opacity-90 active:opacity-95"
+            }`}
+            style={cooldownSeconds === 0 ? { backgroundColor: "#17752a" } : {}}
+          >
+            {isLoading ? (
+              <>
+                <svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                <span>Processando...</span>
+              </>
+            ) : cooldownSeconds > 0 ? (
+              <>
+                <svg className="w-5 h-5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>Aguarde {cooldownSeconds}s</span>
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <span>Iniciar Validação Digital</span>
+              </>
+            )}
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  // Modo manual: formulário completo
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl">
+    <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-lg">
       <div className="flex items-center gap-3 mb-6">
-        <div className="p-2 bg-blue-500/10 rounded-lg">
-          <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div className="p-2 rounded-lg" style={{ backgroundColor: "rgba(23,117,42,0.1)" }}>
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="#17752a">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
           </svg>
         </div>
-        <h2 className="text-xl font-semibold">Perfil para Análise</h2>
+        <h2 className="text-xl font-semibold text-gray-900">Perfil para Análise</h2>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmitManual} className="space-y-4">
         <div>
-          <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Nome Completo</label>
+          <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">Nome Completo</label>
           <input
             type="text"
             required
             disabled={isLoading || cooldownSeconds > 0}
             placeholder="Ex: João da Silva"
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition-all text-slate-100 disabled:opacity-50"
+            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#17752a]/30 focus:border-[#17752a] transition-all text-gray-900 disabled:opacity-50"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
         </div>
-
         <div>
-          <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Cargo ou Área Técnica</label>
+          <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">Cargo ou Área Técnica</label>
           <input
             type="text"
             required
             disabled={isLoading || cooldownSeconds > 0}
             placeholder="Ex: Senior Go Developer"
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition-all text-slate-100 disabled:opacity-50"
+            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#17752a]/30 focus:border-[#17752a] transition-all text-gray-900 disabled:opacity-50"
             value={role}
             onChange={(e) => setRole(e.target.value)}
           />
         </div>
-
         <div>
           <div className="flex justify-between items-center mb-1.5 ml-1">
-            <label className="block text-xs font-bold text-slate-400 uppercase">Links de Referência</label>
-            <button 
-              type="button" 
+            <label className="block text-xs font-bold text-gray-500 uppercase">Links de Referência</label>
+            <button
+              type="button"
               onClick={handleAddLink}
               disabled={isLoading || cooldownSeconds > 0}
-              className="text-[10px] bg-blue-600/20 text-blue-400 hover:bg-blue-600/40 px-2 py-0.5 rounded transition-colors flex items-center gap-1 disabled:opacity-30"
+              className="text-[10px] px-2 py-0.5 rounded transition-colors flex items-center gap-1 disabled:opacity-30 hover:opacity-80"
+              style={{ backgroundColor: "rgba(23,117,42,0.15)", color: "#17752a" }}
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -97,7 +175,6 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
               Adicionar outro
             </button>
           </div>
-          
           <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1 custom-scrollbar">
             {referenceUrls.map((url, index) => (
               <div key={index} className="flex gap-2 group">
@@ -105,15 +182,15 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
                   type="url"
                   disabled={isLoading || cooldownSeconds > 0}
                   placeholder="LinkedIn, GitHub, Portfolio..."
-                  className="flex-grow bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition-all text-sm text-slate-100 disabled:opacity-50"
+                  className="flex-grow bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#17752a]/30 focus:border-[#17752a] transition-all text-sm text-gray-900 disabled:opacity-50"
                   value={url}
                   onChange={(e) => handleLinkChange(index, e.target.value)}
                 />
                 <button
                   type="button"
                   onClick={() => handleRemoveLink(index)}
-                  disabled={isLoading || cooldownSeconds > 0 || (referenceUrls.length === 1 && url === '')}
-                  className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-all disabled:opacity-20"
+                  disabled={isLoading || cooldownSeconds > 0 || (referenceUrls.length === 1 && !url)}
+                  className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all disabled:opacity-20"
                   title="Remover link"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -124,15 +201,15 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
             ))}
           </div>
         </div>
-
         <button
           type="submit"
           disabled={isButtonDisabled}
           className={`w-full mt-4 font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-all shadow-lg disabled:cursor-not-allowed ${
             cooldownSeconds > 0 
-              ? 'bg-slate-800 text-slate-500 border border-slate-700' 
-              : 'bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white shadow-blue-900/20'
+              ? 'bg-gray-200 text-gray-500 border border-gray-300' 
+              : 'text-white hover:opacity-90 active:opacity-95'
           }`}
+          style={cooldownSeconds === 0 ? { backgroundColor: '#17752a' } : {}}
         >
           {isLoading ? (
             <>
@@ -163,7 +240,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 10px; }
       `}</style>
     </div>
   );
