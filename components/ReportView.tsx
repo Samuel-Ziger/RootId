@@ -31,7 +31,7 @@ function renderLineWithSourceLinks(
             target="_blank"
             rel="noopener noreferrer"
             className="underline font-medium"
-            style={{ color: '#17752a' }}
+            style={{ color: '#2563eb' }}
             title={src.uri}
           >
             [{num}]
@@ -98,7 +98,7 @@ export const ReportView: React.FC<ReportViewProps> = ({ result }) => {
       <h3
         key={lineIndex}
         className="mt-6 mb-3 text-lg font-bold border-b border-gray-200 pb-2 uppercase tracking-wide flex items-center gap-2 flex-wrap"
-        style={{ color: '#252e16' }}
+        style={{ color: '#1e3a5f' }}
       >
         {hasHelp && (
           <button
@@ -106,9 +106,9 @@ export const ReportView: React.FC<ReportViewProps> = ({ result }) => {
             onClick={() => setHelpOpen(helpKey)}
             className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold border-2 transition-all focus:outline-none focus:ring-2 focus:ring-offset-1 hover:opacity-90"
             style={{
-              borderColor: '#17752a',
-              color: '#17752a',
-              backgroundColor: 'rgba(23,117,42,0.08)',
+              borderColor: '#2563eb',
+              color: '#2563eb',
+              backgroundColor: 'rgba(37,99,235,0.08)',
             }}
             title="O que é esta seção?"
             aria-label="Explicação da seção"
@@ -140,12 +140,12 @@ export const ReportView: React.FC<ReportViewProps> = ({ result }) => {
           />
           <div
             className="relative bg-white border-2 rounded-xl shadow-xl max-w-md w-full p-6 animate-in fade-in zoom-in-95 duration-200"
-            style={{ borderColor: '#17752a' }}
+            style={{ borderColor: '#2563eb' }}
           >
             <div className="flex items-start gap-3">
               <div
                 className="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold text-white"
-                style={{ backgroundColor: '#17752a' }}
+                style={{ backgroundColor: '#2563eb' }}
               >
                 ?
               </div>
@@ -162,7 +162,7 @@ export const ReportView: React.FC<ReportViewProps> = ({ result }) => {
               type="button"
               onClick={closeHelp}
               className="mt-6 w-full py-2.5 rounded-lg font-semibold text-white transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 hover:opacity-90"
-              style={{ backgroundColor: '#17752a' }}
+              style={{ backgroundColor: '#2563eb' }}
             >
               Fechar
             </button>
@@ -171,10 +171,10 @@ export const ReportView: React.FC<ReportViewProps> = ({ result }) => {
       )}
 
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-lg">
-        <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center" style={{ backgroundColor: 'rgba(37,46,22,0.05)' }}>
+        <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center" style={{ backgroundColor: 'rgba(37,99,235,0.06)' }}>
           <div className="flex items-center gap-3">
-            <div className="p-1.5 rounded" style={{ backgroundColor: 'rgba(23,117,42,0.15)' }}>
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="#17752a">
+            <div className="p-1.5 rounded" style={{ backgroundColor: 'rgba(37,99,235,0.15)' }}>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="#2563eb">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
             </div>
@@ -199,7 +199,7 @@ export const ReportView: React.FC<ReportViewProps> = ({ result }) => {
               const listContent = line.replace(/^[*-]\s*/, '');
               return (
                 <li key={i} className="text-gray-700 ml-4 mb-1 list-none flex gap-2">
-                  <span style={{ color: '#17752a' }}>•</span>
+                  <span style={{ color: '#2563eb' }}>•</span>
                   <span>{renderLineWithSourceLinks(listContent, result.sources, renderLine)}</span>
                 </li>
               );
@@ -222,9 +222,9 @@ export const ReportView: React.FC<ReportViewProps> = ({ result }) => {
               onClick={() => setHelpOpen('fontes')}
               className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all focus:outline-none focus:ring-2 focus:ring-offset-1"
               style={{
-                borderColor: '#17752a',
-                color: '#17752a',
-                backgroundColor: 'rgba(23,117,42,0.08)',
+                borderColor: '#2563eb',
+                color: '#2563eb',
+                backgroundColor: 'rgba(37,99,235,0.08)',
               }}
               title="O que é esta seção?"
               aria-label="Explicação da seção"
@@ -243,12 +243,12 @@ export const ReportView: React.FC<ReportViewProps> = ({ result }) => {
                 href={source.uri}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-start gap-3 p-3 bg-gray-50 border border-gray-200 rounded-lg hover:border-[#17752a]/50 hover:bg-gray-100 transition-all group"
+                className="flex items-start gap-3 p-3 bg-gray-50 border border-gray-200 rounded-lg hover:border-blue-500/50 hover:bg-gray-100 transition-all group"
               >
-                <div className="mt-1 w-2 h-2 rounded-full flex-shrink-0 group-hover:animate-ping" style={{ backgroundColor: '#17752a' }} />
+                <div className="mt-1 w-2 h-2 rounded-full flex-shrink-0 group-hover:animate-ping" style={{ backgroundColor: '#2563eb' }} />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-gray-800 truncate">{source.title}</p>
-                  <p className="text-xs text-gray-500 mt-1 break-all" style={{ color: '#17752a' }}>
+                  <p className="text-xs text-gray-500 mt-1 break-all" style={{ color: '#2563eb' }}>
                     <span className="text-gray-500 font-medium">Link: </span>
                     {source.uri}
                   </p>

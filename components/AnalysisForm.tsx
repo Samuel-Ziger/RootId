@@ -75,13 +75,14 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
         ? `${candidato.firstname} ${candidato.lastname}`
         : "Candidato");
 
+    const ROOTID = '#2563eb';
     return (
-      <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-lg">
+      <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-6 shadow-xl">
         <form onSubmit={handleSubmitFromCandidato} className="space-y-6">
           <div>
-            <p className="text-sm text-gray-500 mb-1">Validar perfil de</p>
-            <p className="text-2xl font-bold text-gray-900">{displayName}</p>
-            <p className="text-xs text-gray-400 mt-2">
+            <p className="text-sm text-slate-400 mb-1">Validar perfil de</p>
+            <p className="text-2xl font-bold text-white">{displayName}</p>
+            <p className="text-xs text-slate-500 mt-2">
               A busca usará nome, links, experiências e demais dados do cadastro.
             </p>
           </div>
@@ -89,9 +90,9 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
             type="submit"
             disabled={isButtonDisabled}
             className={`w-full font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-all shadow-lg disabled:cursor-not-allowed ${
-              cooldownSeconds > 0 ? "bg-gray-200 text-gray-500 border border-gray-300" : "text-white hover:opacity-90 active:opacity-95"
+              cooldownSeconds > 0 ? "bg-slate-600 text-slate-400 border border-slate-500" : "text-white hover:opacity-90 active:opacity-95"
             }`}
-            style={cooldownSeconds === 0 ? { backgroundColor: "#17752a" } : {}}
+            style={cooldownSeconds === 0 ? { backgroundColor: ROOTID } : {}}
           >
             {isLoading ? (
               <>
@@ -123,51 +124,52 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
   }
 
   // Modo manual: formulário completo
+  const ROOTID = '#2563eb';
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-6 shadow-lg">
+    <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-6 shadow-xl">
       <div className="flex items-center gap-3 mb-6">
-        <div className="p-2 rounded-lg" style={{ backgroundColor: "rgba(23,117,42,0.1)" }}>
-          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="#17752a">
+        <div className="p-2 rounded-lg" style={{ backgroundColor: 'rgba(37,99,235,0.2)' }}>
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke={ROOTID}>
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
           </svg>
         </div>
-        <h2 className="text-xl font-semibold text-gray-900">Perfil para Análise</h2>
+        <h2 className="text-xl font-semibold text-white">Perfil para análise</h2>
       </div>
 
       <form onSubmit={handleSubmitManual} className="space-y-4">
         <div>
-          <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">Nome Completo</label>
+          <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Nome completo</label>
           <input
             type="text"
             required
             disabled={isLoading || cooldownSeconds > 0}
             placeholder="Ex: João da Silva"
-            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#17752a]/30 focus:border-[#17752a] transition-all text-gray-900 disabled:opacity-50"
+            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all text-white placeholder-slate-500 disabled:opacity-50"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
         </div>
         <div>
-          <label className="block text-xs font-bold text-gray-500 uppercase mb-1.5 ml-1">Cargo ou Área Técnica</label>
+          <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Cargo ou área técnica</label>
           <input
             type="text"
             required
             disabled={isLoading || cooldownSeconds > 0}
             placeholder="Ex: Senior Go Developer"
-            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[#17752a]/30 focus:border-[#17752a] transition-all text-gray-900 disabled:opacity-50"
+            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all text-white placeholder-slate-500 disabled:opacity-50"
             value={role}
             onChange={(e) => setRole(e.target.value)}
           />
         </div>
         <div>
           <div className="flex justify-between items-center mb-1.5 ml-1">
-            <label className="block text-xs font-bold text-gray-500 uppercase">Links de Referência</label>
+            <label className="block text-xs font-bold text-slate-400 uppercase">Links de referência</label>
             <button
               type="button"
               onClick={handleAddLink}
               disabled={isLoading || cooldownSeconds > 0}
-              className="text-[10px] px-2 py-0.5 rounded transition-colors flex items-center gap-1 disabled:opacity-30 hover:opacity-80"
-              style={{ backgroundColor: "rgba(23,117,42,0.15)", color: "#17752a" }}
+              className="text-[10px] px-2 py-0.5 rounded transition-colors flex items-center gap-1 disabled:opacity-30 hover:opacity-80 text-blue-400"
+              style={{ backgroundColor: 'rgba(37,99,235,0.15)' }}
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -182,7 +184,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
                   type="url"
                   disabled={isLoading || cooldownSeconds > 0}
                   placeholder="LinkedIn, GitHub, Portfolio..."
-                  className="flex-grow bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#17752a]/30 focus:border-[#17752a] transition-all text-sm text-gray-900 disabled:opacity-50"
+                  className="flex-grow bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all text-sm text-white placeholder-slate-500 disabled:opacity-50"
                   value={url}
                   onChange={(e) => handleLinkChange(index, e.target.value)}
                 />
@@ -190,7 +192,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
                   type="button"
                   onClick={() => handleRemoveLink(index)}
                   disabled={isLoading || cooldownSeconds > 0 || (referenceUrls.length === 1 && !url)}
-                  className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all disabled:opacity-20"
+                  className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all disabled:opacity-20"
                   title="Remover link"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -206,10 +208,10 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
           disabled={isButtonDisabled}
           className={`w-full mt-4 font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-all shadow-lg disabled:cursor-not-allowed ${
             cooldownSeconds > 0 
-              ? 'bg-gray-200 text-gray-500 border border-gray-300' 
+              ? 'bg-slate-600 text-slate-400 border border-slate-500' 
               : 'text-white hover:opacity-90 active:opacity-95'
           }`}
-          style={cooldownSeconds === 0 ? { backgroundColor: '#17752a' } : {}}
+          style={cooldownSeconds === 0 ? { backgroundColor: ROOTID } : {}}
         >
           {isLoading ? (
             <>
@@ -240,7 +242,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; border-radius: 10px; }
       `}</style>
     </div>
   );

@@ -80,11 +80,11 @@ const App: React.FC<AppProps> = ({ candidato }) => {
         <div className="lg:col-span-4 space-y-6 lg:sticky lg:top-24">
           {!candidato && (
             <div className="mb-2">
-              <h1 className="text-4xl font-extrabold text-gray-900 mb-2 tracking-tight">
-                Ache um Veterano <span style={{ color: '#17752a' }} className="italic">IA</span>
+              <h1 className="text-4xl font-extrabold text-white mb-2 tracking-tight">
+                Root<span style={{ color: '#2563eb' }}>ID</span>
               </h1>
-              <p className="text-gray-600 text-sm leading-relaxed">
-                Analista OSINT autônomo para validação profissional. Localizamos a origem digital de perfis técnicos para garantir contratações seguras.
+              <p className="text-slate-400 text-sm leading-relaxed">
+                Validador OSINT autônomo. Mapeia a pegada digital do candidato e gera relatório de consistência e risco para decisão de contratação.
               </p>
             </div>
           )}
@@ -96,13 +96,13 @@ const App: React.FC<AppProps> = ({ candidato }) => {
           />
 
           {state.error && (
-            <div className={`border rounded-lg p-4 flex gap-3 animate-in fade-in zoom-in ${state.cooldownSeconds > 0 ? 'bg-amber-50 border-amber-300 text-amber-800' : 'bg-red-50 border-red-200 text-red-700'}`}>
+            <div className={`border rounded-lg p-4 flex gap-3 animate-in fade-in zoom-in ${state.cooldownSeconds > 0 ? 'bg-amber-500/10 border-amber-500/50 text-amber-200' : 'bg-red-500/10 border-red-500/50 text-red-200'}`}>
               <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <div className="text-xs font-medium">
                 <p className="font-bold mb-1 uppercase tracking-wider">
-                  {state.cooldownSeconds > 0 ? 'Aguarde a Cota' : 'Erro do Sistema'}
+                  {state.cooldownSeconds > 0 ? 'Aguarde a cota' : 'Erro do sistema'}
                 </p>
                 <p>{state.error}</p>
                 {state.cooldownSeconds > 0 && (
@@ -111,7 +111,7 @@ const App: React.FC<AppProps> = ({ candidato }) => {
                 {state.cooldownSeconds === 0 && (
                   <button 
                       onClick={() => setState({...state, error: null})}
-                      className="mt-2 text-red-700 bg-red-100 px-2 py-1 rounded hover:bg-red-200 transition-colors"
+                      className="mt-2 text-red-300 bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 transition-colors"
                   >
                       Dispensar
                   </button>
@@ -128,15 +128,15 @@ const App: React.FC<AppProps> = ({ candidato }) => {
           ) : state.result ? (
             <ReportView result={state.result} />
           ) : (
-            <div className="h-full border-2 border-dashed border-gray-300 rounded-2xl flex flex-col items-center justify-center p-12 text-center text-gray-600 bg-gray-50">
-              <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6 opacity-60" style={{ backgroundColor: 'rgba(23,117,42,0.2)' }}>
-                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="#17752a">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+            <div className="h-full border-2 border-dashed border-slate-600 rounded-2xl flex flex-col items-center justify-center p-12 text-center text-slate-400 bg-slate-800/50">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6 opacity-80" style={{ backgroundColor: 'rgba(37,99,235,0.2)' }}>
+                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="#2563eb" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                 </svg>
               </div>
-              <h3 className="text-lg font-semibold text-gray-800 mb-2">Aguardando Parâmetros</h3>
+              <h3 className="text-lg font-semibold text-slate-200 mb-2">Aguardando parâmetros</h3>
               <p className="max-w-xs text-sm">
-                Forneça o nome e cargo do candidato para iniciar. A IA mapeará todas as fontes públicas.
+                Informe nome e cargo (e opcionalmente links). O RootID mapeia fontes públicas e gera o relatório.
               </p>
             </div>
           )}
