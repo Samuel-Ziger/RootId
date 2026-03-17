@@ -11,10 +11,26 @@ interface AnalysisFormProps {
   candidato?: AcheUmVeteranoCandidato | null;
 }
 
+/** Retorna só dígitos do CPF (até 11) */
+function cpfDigits(value: string): string {
+  return value.replace(/\D/g, '').slice(0, 11);
+}
+
+/** Formata CPF como 000.000.000-00 */
+function formatCpf(value: string): string {
+  const d = cpfDigits(value);
+  if (d.length <= 3) return d;
+  if (d.length <= 6) return `${d.slice(0, 3)}.${d.slice(3)}`;
+  if (d.length <= 9) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
+
 export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading, cooldownSeconds = 0, candidato }) => {
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
   const [referenceUrls, setReferenceUrls] = useState<string[]>(['']);
+  const [cpf, setCpf] = useState('');
+  const [activeTab, setActiveTab] = useState<'dados' | 'cpf'>('dados');
 
   useEffect(() => {
     if (candidato) {
@@ -22,6 +38,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       setName(mapped.name);
       setRole(mapped.role);
       setReferenceUrls(mapped.referenceUrls.length > 0 ? mapped.referenceUrls : ['']);
+      setCpf(mapped.cpf ? formatCpf(mapped.cpf) : '');
     }
   }, [candidato]);
 
@@ -43,6 +60,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
     setReferenceUrls(newLinks);
   };
 
+  const cpfOnlyDigits = cpfDigits(cpf);
+
   const handleSubmitFromCandidato = (e: React.FormEvent) => {
     e.preventDefault();
     if (!candidato || isLoading || cooldownSeconds > 0) return;
@@ -51,6 +70,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       name: mapped.name,
       role: mapped.role,
       referenceUrls: mapped.referenceUrls.filter((u) => u && u.trim()),
+      ...(cpfOnlyDigits.length === 11 && { cpf: cpfOnlyDigits }),
       candidato,
     });
   };
@@ -62,13 +82,14 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       name,
       role,
       referenceUrls: referenceUrls.filter((u) => u && u.trim()),
+      ...(cpfOnlyDigits.length === 11 && { cpf: cpfOnlyDigits }),
     });
   };
 
   const isCandidatoMode = !!candidato;
   const isButtonDisabled = isLoading || cooldownSeconds > 0 || (isCandidatoMode ? false : !name || !role);
 
-  // Modo candidato (dados do JSON): só nome + botão
+  // Modo candidato (dados do JSON): nome + CPF opcional + botão
   if (isCandidatoMode) {
     const displayName =
       candidato?.nome || (candidato?.firstname && candidato?.lastname
@@ -85,6 +106,19 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
             <p className="text-xs text-slate-500 mt-2">
               A busca usará nome, links, experiências e demais dados do cadastro.
             </p>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">CPF (opcional)</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              disabled={isLoading || cooldownSeconds > 0}
+              placeholder="000.000.000-00"
+              className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all text-white placeholder-slate-500 disabled:opacity-50"
+              value={cpf}
+              onChange={(e) => setCpf(formatCpf(e.target.value))}
+            />
+            <p className="text-[10px] text-slate-500 mt-1 ml-1">Se informado, será usado na análise e no Datajud.</p>
           </div>
           <button
             type="submit"
@@ -123,7 +157,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
     );
   }
 
-  // Modo manual: formulário completo
+  // Modo manual: formulário com abas (Dados principais | CPF opcional)
   const ROOTID = '#2563eb';
   return (
     <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-6 shadow-xl">
@@ -136,7 +170,44 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
         <h2 className="text-xl font-semibold text-white">Perfil para análise</h2>
       </div>
 
+      <div className="flex border-b border-slate-600 mb-4">
+        <button
+          type="button"
+          onClick={() => setActiveTab('dados')}
+          className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+            activeTab === 'dados' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          Dados principais
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('cpf')}
+          className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+            activeTab === 'cpf' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          CPF (opcional)
+        </button>
+      </div>
+
       <form onSubmit={handleSubmitManual} className="space-y-4">
+        {activeTab === 'cpf' ? (
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">CPF</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              disabled={isLoading || cooldownSeconds > 0}
+              placeholder="000.000.000-00"
+              className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all text-white placeholder-slate-500 disabled:opacity-50"
+              value={cpf}
+              onChange={(e) => setCpf(formatCpf(e.target.value))}
+            />
+            <p className="text-[10px] text-slate-500 mt-1 ml-1">Opcional. Se informado, será usado na análise e em buscas no Datajud (processos judiciais).</p>
+          </div>
+        ) : (
+          <>
         <div>
           <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Nome completo</label>
           <input
@@ -203,6 +274,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
             ))}
           </div>
         </div>
+          </>
+        )}
         <button
           type="submit"
           disabled={isButtonDisabled}

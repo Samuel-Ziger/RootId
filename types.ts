@@ -5,6 +5,8 @@ export interface CandidateData {
   name: string;
   role: string;
   referenceUrls: string[];
+  /** CPF (opcional). Se informado, será usado na análise e em buscas no Datajud. */
+  cpf?: string;
 }
 
 /**
@@ -18,6 +20,7 @@ export interface AcheUmVeteranoCandidato {
   nome?: string;
   firstname?: string;
   lastname?: string;
+  cpf?: string;
   email?: string;
   telefone?: string;
   cidade?: string;

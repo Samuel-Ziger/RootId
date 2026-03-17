@@ -198,25 +198,13 @@ type DatajudSource = {
   [key: string]: unknown;
 };
 
-async function searchWithDatajud(nome: string): Promise<{ organic?: SearchItem[] } | null> {
-  const apiKey = getDatajudApiKey();
-  if (!apiKey || !apiKey.trim()) return null;
-  const query = nome.trim().replace(/\s+/g, " ").slice(0, 120);
-  if (!query || query.length < 3) return null;
-
-  const body = {
-    size: 15,
-    query: {
-      query_string: {
-        query: `*${query.split(" ").join("* *")}*`,
-        default_operator: "or",
-      },
-    },
-  };
-
-  const results: SearchItem[] = [];
+/** Executa uma rodada de buscas Datajud (por nome ou por CPF) e adiciona em results */
+async function datajudSearchRound(
+  apiKey: string,
+  body: { size: number; query: { query_string: { query: string; default_operator?: string } } },
+  results: SearchItem[]
+): Promise<void> {
   const authHeader = `APIKey ${apiKey.trim()}`;
-
   await Promise.all(
     DATAJUD_ALIASES.map(async (alias) => {
       try {
@@ -231,9 +219,8 @@ async function searchWithDatajud(nome: string): Promise<{ organic?: SearchItem[]
         });
 
         if (!response.ok) {
-          const text = await response.text();
           if (response.status === 401) console.warn("Datajud: API Key inválida ou ausente. Use DATAJUD_API_KEY no .env");
-          else console.warn("Datajud", alias, response.status, text.slice(0, 120));
+          else console.warn("Datajud", alias, response.status);
           return;
         }
 
@@ -257,6 +244,38 @@ async function searchWithDatajud(nome: string): Promise<{ organic?: SearchItem[]
       }
     })
   );
+}
+
+/** Busca no Datajud por lista de nomes e, opcionalmente, por CPF (uma rodada por nome + uma por CPF). */
+async function searchWithDatajud(nomes: string[], cpf?: string): Promise<{ organic?: SearchItem[] } | null> {
+  const apiKey = getDatajudApiKey();
+  if (!apiKey || !apiKey.trim()) return null;
+
+  const results: SearchItem[] = [];
+
+  for (const nome of nomes) {
+    const query = nome.trim().replace(/\s+/g, " ").slice(0, 120);
+    if (!query || query.length < 3) continue;
+    const bodyName = {
+      size: 15,
+      query: {
+        query_string: {
+          query: `*${query.split(" ").join("* *")}*`,
+          default_operator: "or",
+        },
+      },
+    };
+    await datajudSearchRound(apiKey, bodyName, results);
+  }
+
+  const cpfDigits = cpf && /^\d{11}$/.test(String(cpf).replace(/\D/g, "")) ? String(cpf).replace(/\D/g, "") : null;
+  if (cpfDigits) {
+    const bodyCpf = {
+      size: 15,
+      query: { query_string: { query: cpfDigits } },
+    };
+    await datajudSearchRound(apiKey, bodyCpf, results);
+  }
 
   return results.length ? { organic: results } : null;
 }
@@ -641,12 +660,17 @@ function buildOSINTPrompt(data: CandidateDataInput, searchResultsContext: string
       ? `\nVARIAÇÕES DE NOME (a pessoa pode usar formatos diferentes online):\n${nameVars.map((v) => `- ${v}`).join("\n")}\nEx.: no LinkedIn pode estar como "samuel-ziger" em vez do nome completo. Considere todas as variações ao validar.`
       : "";
   const enrichedContext = data.candidato ? buildEnrichedContext(data.candidato) : "";
+  const cpfDisplay =
+    data.cpf && /^\d{11}$/.test(String(data.cpf).replace(/\D/g, ""))
+      ? String(data.cpf).replace(/\D/g, "").replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")
+      : "";
+  const cpfBlock = cpfDisplay ? `\n- CPF (informado pelo candidato): ${cpfDisplay}. Use para cruzar com processos no Datajud e com menções em fontes quando relevante.` : "";
 
   return `Você é um analista OSINT rigoroso. Sua tarefa é CRUZAR todos os dados fornecidos com os resultados da web.
 
 DADOS DO CANDIDATO:
 - Nome completo: ${data.name}
-- Cargo/Área: ${data.role}
+- Cargo/Área: ${data.role}${cpfBlock}
 ${linksBlock}
 ${nameVariationsBlock}
 
@@ -743,6 +767,7 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
   const datajudNames = parts.length >= 2
     ? [nameForDatajud, `${parts[0]} ${parts[parts.length - 1]}`]
     : [nameForDatajud];
+  const datajudCpf = data.cpf && /^\d{11}$/.test(String(data.cpf).replace(/\D/g, "")) ? String(data.cpf).replace(/\D/g, "") : undefined;
 
   const [webResults, siteResults, newsResults, infosimplesResults, serpApiResults, datajudResults] = await Promise.all([
     Promise.all(web.map((q) => searchWithSerper(q, "search"))),
@@ -750,7 +775,7 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
     Promise.all(news.map((q) => searchWithSerper(q, "news"))),
     Promise.all(webForInfosimples.map((q) => searchWithInfosimples(q))),
     Promise.all(webForSerpApi.map((q) => searchWithSerpApi(q))),
-    Promise.all(datajudNames.map((nome) => searchWithDatajud(nome))),
+    searchWithDatajud(datajudNames, datajudCpf),
   ]);
   const organicResults = mergeSearchResults([
     ...webResults,
@@ -758,7 +783,7 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
     ...newsResults,
     ...infosimplesResults,
     ...serpApiResults,
-    ...datajudResults,
+    datajudResults,
   ]);
 
   const searchResultsContext =

@@ -56,6 +56,7 @@ export function mapCandidatoToRootID(
 
   const referenceUrls = extractReferenceUrls(candidato);
 
+  const cpf = overrides?.cpf ?? candidato.cpf;
   return {
     name: overrides?.name ?? nome,
     role: overrides?.role ?? role,
@@ -65,6 +66,7 @@ export function mapCandidatoToRootID(
         : referenceUrls.length > 0
           ? referenceUrls
           : [""],
+    ...(cpf && { cpf: typeof cpf === "string" ? cpf.trim() : String(cpf) }),
   };
 }
 
