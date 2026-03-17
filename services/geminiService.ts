@@ -182,8 +182,14 @@ const getDatajudApiKey = () =>
   "";
 
 const DATAJUD_BASE = "https://api-publica.datajud.cnj.jus.br";
-// Tribunais consultados para busca por nome (STJ, TST, TJSP, TRF1)
-const DATAJUD_ALIASES = ["api_publica_stj", "api_publica_tst", "api_publica_tjsp", "api_publica_trf1"];
+// Processos trabalhistas: TST + TRTs (principais regiões)
+const DATAJUD_ALIASES_TRABALHISTA = [
+  "api_publica_tst",
+  "api_publica_trt1", "api_publica_trt2", "api_publica_trt3",
+  "api_publica_trt4", "api_publica_trt5", "api_publica_trt6",
+];
+// Outros tipos: STJ, TJSP, TRF1 (estadual, federal)
+const DATAJUD_ALIASES_OUTROS = ["api_publica_stj", "api_publica_tjsp", "api_publica_trf1"];
 
 /** Hit Elasticsearch do Datajud: _source com metadados do processo */
 type DatajudSource = {
@@ -198,15 +204,16 @@ type DatajudSource = {
   [key: string]: unknown;
 };
 
-/** Executa uma rodada de buscas Datajud (por nome ou por CPF) e adiciona em results */
+/** Executa uma rodada de buscas Datajud nos tribunais indicados e adiciona em results */
 async function datajudSearchRound(
   apiKey: string,
   body: { size: number; query: { query_string: { query: string; default_operator?: string } } },
-  results: SearchItem[]
+  results: SearchItem[],
+  aliases: string[]
 ): Promise<void> {
   const authHeader = `APIKey ${apiKey.trim()}`;
   await Promise.all(
-    DATAJUD_ALIASES.map(async (alias) => {
+    aliases.map(async (alias) => {
       try {
         const url = `${DATAJUD_BASE}/${alias}/_search`;
         const response = await fetch(url, {
@@ -246,10 +253,28 @@ async function datajudSearchRound(
   );
 }
 
-/** Busca no Datajud por lista de nomes e, opcionalmente, por CPF (uma rodada por nome + uma por CPF). */
-async function searchWithDatajud(nomes: string[], cpf?: string): Promise<{ organic?: SearchItem[] } | null> {
+/** Monta a lista de tribunais Datajud conforme opções (trabalhista e/ou outros). Se ambos false, usa outros. */
+function getDatajudAliases(opcoes: { trabalhista?: boolean; outros?: boolean }): string[] {
+  const trabalhista = opcoes.trabalhista !== false;
+  const outros = opcoes.outros !== false;
+  if (!trabalhista && !outros) return DATAJUD_ALIASES_OUTROS;
+  const list: string[] = [];
+  if (trabalhista) list.push(...DATAJUD_ALIASES_TRABALHISTA);
+  if (outros) list.push(...DATAJUD_ALIASES_OUTROS);
+  return list;
+}
+
+/** Busca no Datajud por lista de nomes e, opcionalmente, por CPF. Tribunais conforme opções (trabalhista / outros). */
+async function searchWithDatajud(
+  nomes: string[],
+  cpf?: string,
+  opcoes?: { trabalhista?: boolean; outros?: boolean }
+): Promise<{ organic?: SearchItem[] } | null> {
   const apiKey = getDatajudApiKey();
   if (!apiKey || !apiKey.trim()) return null;
+
+  const aliases = getDatajudAliases(opcoes ?? {});
+  if (aliases.length === 0) return null;
 
   const results: SearchItem[] = [];
 
@@ -265,7 +290,7 @@ async function searchWithDatajud(nomes: string[], cpf?: string): Promise<{ organ
         },
       },
     };
-    await datajudSearchRound(apiKey, bodyName, results);
+    await datajudSearchRound(apiKey, bodyName, results, aliases);
   }
 
   const cpfDigits = cpf && /^\d{11}$/.test(String(cpf).replace(/\D/g, "")) ? String(cpf).replace(/\D/g, "") : null;
@@ -274,7 +299,7 @@ async function searchWithDatajud(nomes: string[], cpf?: string): Promise<{ organ
       size: 15,
       query: { query_string: { query: cpfDigits } },
     };
-    await datajudSearchRound(apiKey, bodyCpf, results);
+    await datajudSearchRound(apiKey, bodyCpf, results, aliases);
   }
 
   return results.length ? { organic: results } : null;
@@ -768,6 +793,10 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
     ? [nameForDatajud, `${parts[0]} ${parts[parts.length - 1]}`]
     : [nameForDatajud];
   const datajudCpf = data.cpf && /^\d{11}$/.test(String(data.cpf).replace(/\D/g, "")) ? String(data.cpf).replace(/\D/g, "") : undefined;
+  const datajudOpcoes = {
+    trabalhista: data.searchProcessoTrabalhista !== false,
+    outros: data.searchOutrosTiposProcesso !== false,
+  };
 
   const [webResults, siteResults, newsResults, infosimplesResults, serpApiResults, datajudResults] = await Promise.all([
     Promise.all(web.map((q) => searchWithSerper(q, "search"))),
@@ -775,7 +804,7 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
     Promise.all(news.map((q) => searchWithSerper(q, "news"))),
     Promise.all(webForInfosimples.map((q) => searchWithInfosimples(q))),
     Promise.all(webForSerpApi.map((q) => searchWithSerpApi(q))),
-    searchWithDatajud(datajudNames, datajudCpf),
+    searchWithDatajud(datajudNames, datajudCpf, datajudOpcoes),
   ]);
   const organicResults = mergeSearchResults([
     ...webResults,

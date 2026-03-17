@@ -30,7 +30,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
   const [role, setRole] = useState('');
   const [referenceUrls, setReferenceUrls] = useState<string[]>(['']);
   const [cpf, setCpf] = useState('');
-  const [activeTab, setActiveTab] = useState<'dados' | 'cpf'>('dados');
+  const [searchProcessoTrabalhista, setSearchProcessoTrabalhista] = useState(true);
+  const [searchOutrosTiposProcesso, setSearchOutrosTiposProcesso] = useState(true);
 
   useEffect(() => {
     if (candidato) {
@@ -71,6 +72,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       role: mapped.role,
       referenceUrls: mapped.referenceUrls.filter((u) => u && u.trim()),
       ...(cpfOnlyDigits.length === 11 && { cpf: cpfOnlyDigits }),
+      searchProcessoTrabalhista,
+      searchOutrosTiposProcesso,
       candidato,
     });
   };
@@ -83,6 +86,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       role,
       referenceUrls: referenceUrls.filter((u) => u && u.trim()),
       ...(cpfOnlyDigits.length === 11 && { cpf: cpfOnlyDigits }),
+      searchProcessoTrabalhista,
+      searchOutrosTiposProcesso,
     });
   };
 
@@ -119,6 +124,31 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
               onChange={(e) => setCpf(formatCpf(e.target.value))}
             />
             <p className="text-[10px] text-slate-500 mt-1 ml-1">Se informado, será usado na análise e no Datajud.</p>
+          </div>
+          <div>
+            <p className="block text-xs font-bold text-slate-400 uppercase mb-2 ml-1">Busca por processo (Datajud)</p>
+            <div className="flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={searchProcessoTrabalhista}
+                  onChange={(e) => setSearchProcessoTrabalhista(e.target.checked)}
+                  disabled={isLoading || cooldownSeconds > 0}
+                  className="rounded border-slate-500 bg-slate-800 text-blue-500 focus:ring-blue-500/50"
+                />
+                <span className="text-sm text-slate-300">Trabalhistas (TRT/TST)</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={searchOutrosTiposProcesso}
+                  onChange={(e) => setSearchOutrosTiposProcesso(e.target.checked)}
+                  disabled={isLoading || cooldownSeconds > 0}
+                  className="rounded border-slate-500 bg-slate-800 text-blue-500 focus:ring-blue-500/50"
+                />
+                <span className="text-sm text-slate-300">Outros (TJ, TRF, STJ)</span>
+              </label>
+            </div>
           </div>
           <button
             type="submit"
@@ -157,7 +187,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
     );
   }
 
-  // Modo manual: formulário com abas (Dados principais | CPF opcional)
+  // Modo manual: dados principais (nome, cargo, links, CPF opcional)
   const ROOTID = '#2563eb';
   return (
     <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-6 shadow-xl">
@@ -170,44 +200,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
         <h2 className="text-xl font-semibold text-white">Perfil para análise</h2>
       </div>
 
-      <div className="flex border-b border-slate-600 mb-4">
-        <button
-          type="button"
-          onClick={() => setActiveTab('dados')}
-          className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
-            activeTab === 'dados' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          Dados principais
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('cpf')}
-          className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
-            activeTab === 'cpf' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          CPF (opcional)
-        </button>
-      </div>
-
       <form onSubmit={handleSubmitManual} className="space-y-4">
-        {activeTab === 'cpf' ? (
-          <div>
-            <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">CPF</label>
-            <input
-              type="text"
-              inputMode="numeric"
-              disabled={isLoading || cooldownSeconds > 0}
-              placeholder="000.000.000-00"
-              className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all text-white placeholder-slate-500 disabled:opacity-50"
-              value={cpf}
-              onChange={(e) => setCpf(formatCpf(e.target.value))}
-            />
-            <p className="text-[10px] text-slate-500 mt-1 ml-1">Opcional. Se informado, será usado na análise e em buscas no Datajud (processos judiciais).</p>
-          </div>
-        ) : (
-          <>
         <div>
           <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Nome completo</label>
           <input
@@ -274,8 +267,45 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
             ))}
           </div>
         </div>
-          </>
-        )}
+        <div>
+          <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">CPF (opcional)</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            disabled={isLoading || cooldownSeconds > 0}
+            placeholder="000.000.000-00"
+            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all text-white placeholder-slate-500 disabled:opacity-50"
+            value={cpf}
+            onChange={(e) => setCpf(formatCpf(e.target.value))}
+          />
+          <p className="text-[10px] text-slate-500 mt-1 ml-1">Se informado, será usado na análise e em buscas no Datajud.</p>
+        </div>
+        <div>
+          <p className="block text-xs font-bold text-slate-400 uppercase mb-2 ml-1">Busca por processo (Datajud)</p>
+          <div className="flex flex-wrap gap-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={searchProcessoTrabalhista}
+                onChange={(e) => setSearchProcessoTrabalhista(e.target.checked)}
+                disabled={isLoading || cooldownSeconds > 0}
+                className="rounded border-slate-500 bg-slate-800 text-blue-500 focus:ring-blue-500/50"
+              />
+              <span className="text-sm text-slate-300">Processos trabalhistas (TRT/TST)</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={searchOutrosTiposProcesso}
+                onChange={(e) => setSearchOutrosTiposProcesso(e.target.checked)}
+                disabled={isLoading || cooldownSeconds > 0}
+                className="rounded border-slate-500 bg-slate-800 text-blue-500 focus:ring-blue-500/50"
+              />
+              <span className="text-sm text-slate-300">Outros tipos (TJ, TRF, STJ)</span>
+            </label>
+          </div>
+          <p className="text-[10px] text-slate-500 mt-1 ml-1">Marque os tipos de processo a incluir na busca no Datajud. Pelo menos um deve estar marcado.</p>
+        </div>
         <button
           type="submit"
           disabled={isButtonDisabled}

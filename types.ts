@@ -7,6 +7,10 @@ export interface CandidateData {
   referenceUrls: string[];
   /** CPF (opcional). Se informado, será usado na análise e em buscas no Datajud. */
   cpf?: string;
+  /** Incluir processos trabalhistas (TRT/TST) na busca Datajud. Padrão true. */
+  searchProcessoTrabalhista?: boolean;
+  /** Incluir outros tipos de processo (TJ, TRF, STJ) na busca Datajud. Padrão true. */
+  searchOutrosTiposProcesso?: boolean;
 }
 
 /**
