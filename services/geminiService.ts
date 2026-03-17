@@ -12,6 +12,124 @@ const getSerperApiKey = () =>
   process.env.NEXT_PUBLIC_SERPER_API_KEY ||
   "16072a196b96f529e251ae46bfd2e0241ee24e76";
 
+// SerpApi (serpapi.com) — Google Search API. Params: api_key, q, engine=google, gl, hl, num
+const getSerpApiKey = () =>
+  process.env.SERPAPI_KEY ||
+  process.env.SERPAPI_API_KEY ||
+  process.env.NEXT_PUBLIC_SERPAPI_KEY ||
+  process.env.VITE_SERPAPI_KEY ||
+  "";
+
+const SERPAPI_BASE = "https://serpapi.com/search";
+
+async function searchWithSerpApi(query: string): Promise<{ organic?: SearchItem[] } | null> {
+  const apiKey = getSerpApiKey();
+  if (!apiKey || !apiKey.trim()) return null;
+  try {
+    const params = new URLSearchParams({
+      engine: "google",
+      q: query.trim().slice(0, 200),
+      api_key: apiKey.trim(),
+      gl: "br",
+      hl: "pt-br",
+      num: String(Math.min(NUM_RESULTS_PER_QUERY, 30)),
+    });
+    const response = await fetch(`${SERPAPI_BASE}?${params.toString()}`);
+
+    if (!response.ok) {
+      const text = await response.text();
+      let msg = `SerpApi ${response.status}`;
+      if (response.status === 401) msg = "SerpApi: api_key inválida ou ausente. Adicione SERPAPI_KEY no .env";
+      else if (response.status === 429) msg = "SerpApi: limite de buscas atingido. Verifique plano em serpapi.com";
+      else if (text) {
+        try {
+          const json = JSON.parse(text);
+          msg += `: ${json.error || text.slice(0, 120)}`;
+        } catch {
+          msg += `: ${text.slice(0, 120)}`;
+        }
+      }
+      console.warn("SerpApi Search:", msg);
+      return null;
+    }
+
+    const data = await response.json();
+    const organicResults = data?.organic_results ?? [];
+    const organic: SearchItem[] = organicResults
+      .filter((r: { link?: string }) => r.link && String(r.link).trim())
+      .map((r: { link: string; title?: string; snippet?: string }) => ({
+        link: String(r.link).trim(),
+        title: (r.title ?? "").trim() || undefined,
+        snippet: (r.snippet ?? "").trim() || undefined,
+      }));
+    return organic.length ? { organic } : null;
+  } catch (error) {
+    console.error("SerpApi Search Error:", error);
+    return null;
+  }
+}
+
+// Chave Infosimples (Buscador Google) — use INFOSIMPLES_API_KEY no .env
+const getInfosimplesApiKey = () =>
+  process.env.INFOSIMPLES_API_KEY ||
+  process.env.NEXT_PUBLIC_INFOSIMPLES_API_KEY ||
+  process.env.VITE_INFOSIMPLES_API_KEY ||
+  "";
+
+const INFOSIMPLES_BUSCADOR_URL = "https://api.infosimples.com/api/v2/consultas/buscador/google";
+
+/** Resposta da API Infosimples Buscador Google: resultados com url, titulo, descricao */
+type InfosimplesResultado = { url?: string; titulo?: string; descricao?: string };
+
+async function searchWithInfosimples(query: string): Promise<{ organic?: SearchItem[] } | null> {
+  const token = getInfosimplesApiKey();
+  if (!token || !token.trim()) {
+    return null;
+  }
+  try {
+    const response = await fetch(INFOSIMPLES_BUSCADOR_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token,
+        query: query.trim().slice(0, 200),
+        safe: "off",
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let msg = `Infosimples API ${response.status}`;
+      if (response.status === 401) msg = "Infosimples: token inválido ou ausente. Adicione INFOSIMPLES_API_KEY no .env";
+      else if (response.status === 429) msg = "Infosimples: limite de consultas atingido. Verifique créditos em api.infosimples.com";
+      else if (text) {
+        try {
+          const json = JSON.parse(text);
+          msg += `: ${json.message || json.error || text.slice(0, 150)}`;
+        } catch {
+          msg += `: ${text.slice(0, 150)}`;
+        }
+      }
+      console.warn("Infosimples Search:", msg);
+      return null;
+    }
+
+    const data = await response.json();
+    const resultados: InfosimplesResultado[] = data?.resultados ?? data?.data?.resultados ?? [];
+    const organic: SearchItem[] = resultados
+      .filter((r: InfosimplesResultado) => r.url && r.url.trim())
+      .map((r: InfosimplesResultado) => ({
+        link: r.url!.trim(),
+        title: (r.titulo ?? "").trim() || undefined,
+        snippet: (r.descricao ?? "").trim() || undefined,
+      }));
+    return organic.length ? { organic } : null;
+  } catch (error) {
+    console.error("Infosimples Search Error:", error);
+    return null;
+  }
+}
+
 async function searchWithSerper(query: string, endpoint: "search" | "news" = "search") {
   const apiKey = getSerperApiKey();
   try {
@@ -54,6 +172,93 @@ async function searchWithSerper(query: string, endpoint: "search" | "news" = "se
     console.error("Serper Search Error:", error);
     return null;
   }
+}
+
+// Datajud (CNJ) — API Pública: metadados de processos judiciais. Auth: Authorization: APIKey [Chave]
+const getDatajudApiKey = () =>
+  process.env.DATAJUD_API_KEY ||
+  process.env.NEXT_PUBLIC_DATAJUD_API_KEY ||
+  process.env.VITE_DATAJUD_API_KEY ||
+  "";
+
+const DATAJUD_BASE = "https://api-publica.datajud.cnj.jus.br";
+// Tribunais consultados para busca por nome (STJ, TST, TJSP, TRF1)
+const DATAJUD_ALIASES = ["api_publica_stj", "api_publica_tst", "api_publica_tjsp", "api_publica_trf1"];
+
+/** Hit Elasticsearch do Datajud: _source com metadados do processo */
+type DatajudSource = {
+  numeroProcesso?: string;
+  classeProcessual?: string;
+  orgaoJulgador?: string;
+  tribunal?: string;
+  assuntos?: string[] | string;
+  pessoa?: string | string[];
+  nomeParte?: string;
+  partes?: Array<{ nome?: string; polo?: string }>;
+  [key: string]: unknown;
+};
+
+async function searchWithDatajud(nome: string): Promise<{ organic?: SearchItem[] } | null> {
+  const apiKey = getDatajudApiKey();
+  if (!apiKey || !apiKey.trim()) return null;
+  const query = nome.trim().replace(/\s+/g, " ").slice(0, 120);
+  if (!query || query.length < 3) return null;
+
+  const body = {
+    size: 15,
+    query: {
+      query_string: {
+        query: `*${query.split(" ").join("* *")}*`,
+        default_operator: "or",
+      },
+    },
+  };
+
+  const results: SearchItem[] = [];
+  const authHeader = `APIKey ${apiKey.trim()}`;
+
+  await Promise.all(
+    DATAJUD_ALIASES.map(async (alias) => {
+      try {
+        const url = `${DATAJUD_BASE}/${alias}/_search`;
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: authHeader,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          if (response.status === 401) console.warn("Datajud: API Key inválida ou ausente. Use DATAJUD_API_KEY no .env");
+          else console.warn("Datajud", alias, response.status, text.slice(0, 120));
+          return;
+        }
+
+        const data = await response.json();
+        const hits = data?.hits?.hits ?? [];
+        const tribunalLabel = alias.replace("api_publica_", "").toUpperCase();
+
+        for (const hit of hits) {
+          const src: DatajudSource = hit._source ?? {};
+          const num = src.numeroProcesso ?? "";
+          const classe = src.classeProcessual ?? "";
+          const orgao = src.orgaoJulgador ?? "";
+          const assuntos = Array.isArray(src.assuntos) ? src.assuntos.join(", ") : String(src.assuntos ?? "");
+          const title = num ? `Processo ${num} (${tribunalLabel})` : `Datajud ${tribunalLabel}`;
+          const snippet = [classe, orgao, assuntos].filter(Boolean).join(" — ") || "Metadado processual CNJ.";
+          const uri = `https://www.cnj.jus.br/sistemas/datajud/api-publica/?processo=${encodeURIComponent(num)}`;
+          if (num) results.push({ link: uri, title, snippet });
+        }
+      } catch (err) {
+        console.error("Datajud Search Error", alias, err);
+      }
+    })
+  );
+
+  return results.length ? { organic: results } : null;
 }
 
 type SearchItem = { title?: string; link?: string; snippet?: string };
@@ -526,14 +731,35 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
     }
   }
 
-  // 1. Busca na web (Serper) + sites específicos + notícias
+  // 1. Busca na web: Serper + Infosimples + Datajud (em paralelo)
   const { web, site, news } = buildSearchQueries(data);
-  const [webResults, siteResults, newsResults] = await Promise.all([
+  const numInfosimplesQueries = 6;
+  const numSerpApiQueries = 6;
+  const webForInfosimples = web.slice(0, numInfosimplesQueries);
+  const webForSerpApi = web.slice(0, numSerpApiQueries);
+
+  const nameForDatajud = data.name.trim().replace(/\s+/g, " ").slice(0, 80);
+  const parts = nameForDatajud.split(/\s+/).filter(Boolean);
+  const datajudNames = parts.length >= 2
+    ? [nameForDatajud, `${parts[0]} ${parts[parts.length - 1]}`]
+    : [nameForDatajud];
+
+  const [webResults, siteResults, newsResults, infosimplesResults, serpApiResults, datajudResults] = await Promise.all([
     Promise.all(web.map((q) => searchWithSerper(q, "search"))),
     Promise.all(site.map((q) => searchWithSerper(q, "search"))),
     Promise.all(news.map((q) => searchWithSerper(q, "news"))),
+    Promise.all(webForInfosimples.map((q) => searchWithInfosimples(q))),
+    Promise.all(webForSerpApi.map((q) => searchWithSerpApi(q))),
+    Promise.all(datajudNames.map((nome) => searchWithDatajud(nome))),
   ]);
-  const organicResults = mergeSearchResults([...webResults, ...siteResults, ...newsResults]);
+  const organicResults = mergeSearchResults([
+    ...webResults,
+    ...siteResults,
+    ...newsResults,
+    ...infosimplesResults,
+    ...serpApiResults,
+    ...datajudResults,
+  ]);
 
   const searchResultsContext =
     organicResults
