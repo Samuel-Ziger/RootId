@@ -190,16 +190,23 @@ export function buildEnrichedContext(candidato: AcheUmVeteranoCandidato): string
     if (idiomasText) addSection("Idiomas", idiomasText);
   }
 
-  // Recomendações (LinkedIn ou outras) — importante para o relatório
-  const recomendacoes = candidato.recomendacoes;
-  if (recomendacoes && Array.isArray(recomendacoes) && recomendacoes.length > 0) {
+  // Recomendações (LinkedIn ou outras) — OBRIGATÓRIO aparecer no relatório quando existir
+  const rawRec = candidato.recomendacoes ?? (candidato as { recommendations?: unknown[] }).recommendations;
+  const recomendacoes = Array.isArray(rawRec) ? rawRec : [];
+  if (recomendacoes.length > 0) {
     const recText = recomendacoes
       .map(
-        (r: { author?: string; text?: string; role?: string }) =>
-          `- ${r.author || "Autor"}${r.role ? ` (${r.role})` : ""}: ${(r.text || "").slice(0, 300)}${(r.text || "").length > 300 ? "..." : ""}`
+        (r: Record<string, unknown>) => {
+          const author = (r.author ?? r.recommender ?? r.nome ?? r.name ?? "Autor") as string;
+          const text = (r.text ?? r.content ?? r.message ?? r.recommendation ?? r.descricao ?? "") as string;
+          const role = (r.role ?? r.position ?? r.cargo ?? r.title) as string | undefined;
+          const part = role ? ` (${role})` : "";
+          const excerpt = String(text || "").trim().slice(0, 500);
+          return `- ${author}${part}: ${excerpt}${excerpt.length >= 500 ? "..." : ""}`;
+        }
       )
       .join("\n");
-    addSection("Recomendações recebidas (ex.: LinkedIn)", recText);
+    addSection("Recomendações recebidas (ex.: LinkedIn) — INCLUIR NO RELATÓRIO na seção Dados coletados do LinkedIn, item (h)", recText);
   }
 
   if (candidato.cidade || candidato.city) {

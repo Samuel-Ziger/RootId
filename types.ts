@@ -112,8 +112,9 @@ export interface AcheUmVeteranoCandidato {
   destaques?: string[] | Array<{ title?: string; description?: string; [key: string]: unknown }>;
   /** Idiomas (ex.: do LinkedIn) */
   idiomas?: Array<{ name?: string; level?: string; [key: string]: unknown }> | string[];
-  /** Recomendações recebidas (ex.: LinkedIn) — se disponível, incluir no relatório */
+  /** Recomendações recebidas (ex.: LinkedIn) — se disponível, incluir no relatório. Aceita também recommendations (EN). */
   recomendacoes?: Array<{ author?: string; text?: string; role?: string; [key: string]: unknown }>;
+  recommendations?: Array<{ author?: string; recommender?: string; text?: string; content?: string; role?: string; position?: string; [key: string]: unknown }>;
   /** Outros links do perfil (website, blog, etc.) */
   links_perfil?: string[] | Record<string, string>;
   /** Dados de testes (uso interno/discreto) */

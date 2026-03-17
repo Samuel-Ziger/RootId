@@ -49,6 +49,7 @@ const SECTION_HELP: Record<string, string> = {
   evidencias: 'Lista o que foi confirmado nas fontes consultadas, com nível de confiança: Alta (fonte primária), Média (agregador) ou Baixa (inferência). Ajuda a saber em que evidências o relatório se baseia.',
   aderencia: 'Avalia se o perfil digital encontrado condiz com a área ou cargo de interesse que o candidato declarou. Mostra se há alinhamento entre a atuação na web e a área desejada.',
   linkedin: 'Busca detalhada: tudo que foi coletado do LinkedIn — link do perfil, todas as experiências (cargo/título), formação, todos os projetos (com link quando houver), todos os destaques (e links neles), idiomas, habilidades, recomendações e todos os links do perfil (site, blog, etc.).',
+  processos: 'Processos judiciais encontrados na base Datajud (CNJ): trabalhistas (TRT/TST), estaduais (TJ), federais (TRF) e superiores (STJ). Cada processo lista número, tribunal e link para consulta. Se não houver nenhum, o relatório informa explicitamente.',
   atentado: 'Seção dedicada a indícios de fraude, golpe, assédio, má conduta ou atentado à honra na internet. Se não houver achados, isso será explicitamente informado.',
   divergencias: 'Aponta contradições entre o declarado e o encontrado, ou lacunas esperadas (por exemplo, ausência de GitHub para quem se diz desenvolvedor).',
   senioridade: 'Classificação do nível profissional (Júnior, Pleno, Sênior ou Specialist) com base no histórico e na pegada digital encontrada.',
@@ -64,6 +65,7 @@ function getSectionHelpKey(title: string): string | null {
   if (t.includes('evidência') && t.includes('confirmada')) return 'evidencias';
   if (t.includes('aderência') || (t.includes('área') && t.includes('interesse'))) return 'aderencia';
   if (t.includes('dados coletados') && t.includes('linkedin')) return 'linkedin';
+  if (t.includes('processos judiciais') || t.includes('processo judicial')) return 'processos';
   if (t.includes('atentado') || t.includes('má conduta') || t.includes('ma conduta')) return 'atentado';
   if (t.includes('divergência') || t.includes('lacuna')) return 'divergencias';
   if (t.includes('senioridade')) return 'senioridade';
