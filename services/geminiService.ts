@@ -327,6 +327,159 @@ function mergeSearchResults(
   return merged;
 }
 
+// --- GitHub REST API (perfil e repositórios públicos) — opcional: GITHUB_TOKEN no .env ---
+const GITHUB_API_BASE = "https://api.github.com";
+
+const getGithubToken = () =>
+  (process.env.GITHUB_TOKEN || process.env.VITE_GITHUB_TOKEN || "").trim();
+
+const GITHUB_PATH_RESERVED = new Set(
+  [
+    "settings", "login", "signup", "explore", "topics", "sponsors", "features",
+    "enterprise", "team", "marketplace", "pricing", "support", "about", "security",
+    "resources", "collections", "events", "desktop", "mobile", "pulls", "issues",
+    "notifications", "orgs", "users", "discussions",
+  ].map((s) => s.toLowerCase())
+);
+
+function extractGithubLoginFromUrl(raw: string): string | null {
+  const u = raw.trim();
+  if (!u || !/github\.com/i.test(u)) return null;
+  try {
+    const href = /^https?:\/\//i.test(u) ? u : `https://${u}`;
+    const parsed = new URL(href);
+    const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+    if (host !== "github.com") return null;
+    const seg = parsed.pathname.split("/").filter(Boolean)[0];
+    if (!seg || GITHUB_PATH_RESERVED.has(seg.toLowerCase())) return null;
+    return seg;
+  } catch {
+    return null;
+  }
+}
+
+function collectGithubLogins(data: CandidateDataInput): string[] {
+  const urls: string[] = [...(data.referenceUrls || []).map(String)].filter(Boolean);
+  const c = data.candidato;
+  if (c) {
+    const socials = (c.redes_sociais || c.socials || {}) as { github?: string };
+    if (socials.github) urls.push(String(socials.github));
+  }
+  const seen = new Set<string>();
+  const logins: string[] = [];
+  for (const url of urls) {
+    const login = extractGithubLoginFromUrl(url);
+    if (login && !seen.has(login.toLowerCase())) {
+      seen.add(login.toLowerCase());
+      logins.push(login);
+      if (logins.length >= 3) break;
+    }
+  }
+  return logins;
+}
+
+type GithubUserJson = {
+  login: string;
+  name?: string | null;
+  bio?: string | null;
+  company?: string | null;
+  blog?: string | null;
+  location?: string | null;
+  html_url: string;
+  public_repos?: number;
+  created_at?: string;
+};
+
+type GithubRepoJson = {
+  name: string;
+  description?: string | null;
+  html_url: string;
+  language?: string | null;
+  stargazers_count?: number;
+  pushed_at?: string | null;
+  fork?: boolean;
+};
+
+async function githubApiGet(path: string, token: string): Promise<Response> {
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "RootID-OSINT/1.0",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return fetch(`${GITHUB_API_BASE}${path}`, { headers });
+}
+
+function formatGithubProfile(login: string, user: GithubUserJson, repos: GithubRepoJson[]): string {
+  const lines: string[] = [];
+  lines.push(`### @${login} (${user.html_url})`);
+  if (user.name) lines.push(`- Nome no perfil: ${user.name}`);
+  if (user.bio) lines.push(`- Bio: ${user.bio.replace(/\s+/g, " ").trim()}`);
+  if (user.company) lines.push(`- Empresa: ${user.company}`);
+  if (user.blog) lines.push(`- Site/blog: ${user.blog}`);
+  if (user.location) lines.push(`- Local: ${user.location}`);
+  if (user.public_repos != null) lines.push(`- Repositórios públicos (total): ${user.public_repos}`);
+  if (user.created_at) lines.push(`- Conta criada: ${user.created_at.slice(0, 10)}`);
+  const ownRepos = repos.filter((r) => !r.fork).slice(0, 8);
+  if (ownRepos.length > 0) {
+    lines.push("- Repositórios públicos recentes (não-fork):");
+    for (const r of ownRepos) {
+      const desc = r.description
+        ? `${r.description.replace(/\s+/g, " ").trim().slice(0, 120)}${(r.description.length > 120 ? "…" : "")}`
+        : "";
+      const parts = [
+        r.name,
+        desc && `— ${desc}`,
+        `[${r.html_url}]`,
+        r.language && `lang: ${r.language}`,
+        r.stargazers_count != null && r.stargazers_count > 0 ? `★${r.stargazers_count}` : "",
+        r.pushed_at && `atualizado: ${r.pushed_at.slice(0, 10)}`,
+      ].filter(Boolean);
+      lines.push(`  - ${parts.join(" | ")}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/** Busca perfil + repos na API oficial quando houver link github.com/... nos dados. */
+async function fetchGithubEnrichmentMarkdown(data: CandidateDataInput): Promise<string> {
+  const logins = collectGithubLogins(data);
+  if (logins.length === 0) return "";
+  const token = getGithubToken();
+  const sections: string[] = [];
+  for (const login of logins) {
+    try {
+      const uRes = await githubApiGet(`/users/${encodeURIComponent(login)}`, token);
+      if (uRes.status === 401) {
+        console.warn("GitHub API: token inválido. Gere um PAT em github.com/settings/tokens e coloque GITHUB_TOKEN no .env");
+        break;
+      }
+      if (uRes.status === 403) {
+        console.warn(
+          "GitHub API: limite anônimo excedido ou bloqueio. Adicione GITHUB_TOKEN no .env (até ~5000 req/h autenticado)."
+        );
+        continue;
+      }
+      if (!uRes.ok) continue;
+      const user = (await uRes.json()) as GithubUserJson;
+      const rRes = await githubApiGet(
+        `/users/${encodeURIComponent(login)}/repos?sort=updated&per_page=10&type=owner`,
+        token
+      );
+      let repos: GithubRepoJson[] = [];
+      if (rRes.ok) repos = (await rRes.json()) as GithubRepoJson[];
+      sections.push(formatGithubProfile(login, user, repos));
+    } catch (e) {
+      console.warn("GitHub API:", e);
+    }
+  }
+  if (sections.length === 0) return "";
+  return (
+    `\nDADOS DO GITHUB (API REST oficial — trate como evidência **Alta** para este perfil e repositórios listados):\n` +
+    `${sections.join("\n\n")}\n`
+  );
+}
+
 /** Normaliza nome para busca */
 function normalizeNameForSearch(name: string): string {
   return name.trim().replace(/\s+/g, " ").slice(0, 80);
@@ -709,7 +862,7 @@ function buildSearchQueries(data: CandidateDataInput): {
 const SYSTEM_INSTRUCTION =
   "Você é o analista OSINT Ache um Veterano IA. Dimensões: (1) Consistência — cruze nome, variações e links com a web. (2) Aderência à área de interesse — avalie se o que foi encontrado CONDIZ com a área/cargo declarado pelo candidato. (3) Risco — avalie perigo para a empresa: discurso agressivo, fraude relatada, comportamento incompatível. (4) Atentado/má conduta na internet — relate explicitamente se há indícios de fraude, golpe, assédio, crimes cibernéticos ou atentado à honra; se não houver, diga claramente. SEMPRE classifique evidências: Alta (fonte primária), Média (agregador), Baixa (inferência). Nunca invente — só cite o que está nos resultados da busca.";
 
-function buildOSINTPrompt(data: CandidateDataInput, searchResultsContext: string): string {
+function buildOSINTPrompt(data: CandidateDataInput, searchResultsContext: string, githubApiContext = ""): string {
   const urls = data.referenceUrls?.filter(Boolean) || [];
   const linksBlock =
     urls.length > 0
@@ -743,9 +896,10 @@ DADOS DO CANDIDATO:
 - Nome completo: ${data.name}
 - Cargo/Área: ${data.role}${cpfBlock}${stateBlock}
 ${linksBlock}
+${githubApiContext}
 ${nameVariationsBlock}
 
-IMPORTANTE: O nome completo (ex: "Samuel Henryk de Souza Ziger") MAL EXISTE na web. A pessoa aparece como "Samuel Ziger" ou "samuel-ziger". O LINK contém a pista: linkedin.com/in/samuel-ziger-237524357 → "samuel-ziger" (antes do número) = "Samuel Ziger" com espaço. É a MESMA PESSOA. Valide cruzando todas as variações.
+IMPORTANTE: Se existir o bloco "DADOS DO GITHUB (API REST oficial)" acima, use-o como fonte primária para GitHub (bio, local, repos públicos, linguagens). O nome completo (ex: "Samuel Henryk de Souza Ziger") MAL EXISTE na web. A pessoa aparece como "Samuel Ziger" ou "samuel-ziger". O LINK contém a pista: linkedin.com/in/samuel-ziger-237524357 → "samuel-ziger" (antes do número) = "Samuel Ziger" com espaço. É a MESMA PESSOA. Valide cruzando todas as variações.
 
 ${enrichedContext}
 
@@ -848,6 +1002,8 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
     outros: data.searchOutrosTiposProcesso !== false,
   };
 
+  const githubEnrichmentPromise = fetchGithubEnrichmentMarkdown(data);
+
   // Estágio A — nome e contexto geral (ordem: Serper -> SerpApi -> Infosimples)
   const webResults = await Promise.all(web.map((q) => searchWithSerper(q, "search")));
   const siteResults = await Promise.all(site.map((q) => searchWithSerper(q, "search")));
@@ -907,7 +1063,8 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
       )
       .join("\n\n") || "Nenhum resultado de busca encontrado na web para este perfil.";
 
-  const prompt = buildOSINTPrompt(data, searchResultsContext);
+  const githubApiContext = await githubEnrichmentPromise;
+  const prompt = buildOSINTPrompt(data, searchResultsContext, githubApiContext);
   const serperSources: GroundingSource[] = organicResults
     .filter((r) => r.link)
     .map((r) => ({ title: r.title || "Fonte", uri: r.link! }))
