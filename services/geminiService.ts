@@ -784,7 +784,7 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
     }
   }
 
-  // 1. Busca na web: Serper + Infosimples + Datajud (em paralelo)
+  // 1) Busca em estágios: nome/web -> Datajud CPF -> web focada em CPF
   const { web, site, news } = buildSearchQueries(data);
   const numInfosimplesQueries = 6;
   const numSerpApiQueries = 6;
@@ -802,21 +802,46 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
     outros: data.searchOutrosTiposProcesso !== false,
   };
 
-  const [webResults, siteResults, newsResults, infosimplesResults, serpApiResults, datajudResults] = await Promise.all([
-    Promise.all(web.map((q) => searchWithSerper(q, "search"))),
-    Promise.all(site.map((q) => searchWithSerper(q, "search"))),
-    Promise.all(news.map((q) => searchWithSerper(q, "news"))),
-    Promise.all(webForInfosimples.map((q) => searchWithInfosimples(q))),
-    Promise.all(webForSerpApi.map((q) => searchWithSerpApi(q))),
-    searchWithDatajud(datajudNames, datajudCpf, datajudOpcoes),
-  ]);
+  // Estágio A — nome e contexto geral (ordem: Serper -> SerpApi -> Infosimples)
+  const webResults = await Promise.all(web.map((q) => searchWithSerper(q, "search")));
+  const siteResults = await Promise.all(site.map((q) => searchWithSerper(q, "search")));
+  const newsResults = await Promise.all(news.map((q) => searchWithSerper(q, "news")));
+  const serpApiResults = await Promise.all(webForSerpApi.map((q) => searchWithSerpApi(q)));
+  const infosimplesResults = await Promise.all(webForInfosimples.map((q) => searchWithInfosimples(q)));
+
+  // Estágio B — Datajud (CPF + nomes)
+  const datajudResults = await searchWithDatajud(datajudNames, datajudCpf, datajudOpcoes);
+
+  // Estágio C — repetir web com foco em CPF (ordem: Serper -> SerpApi -> Infosimples)
+  const cpfQueries: string[] = [];
+  if (datajudCpf) {
+    const cpfFormatado = datajudCpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+    cpfQueries.push(`"${datajudCpf}"`);
+    cpfQueries.push(`"${cpfFormatado}"`);
+    cpfQueries.push(`"${data.name}" "${datajudCpf}"`);
+    cpfQueries.push(`"${data.name}" "${cpfFormatado}"`);
+  }
+
+  const cpfSerperResults = cpfQueries.length
+    ? await Promise.all(cpfQueries.map((q) => searchWithSerper(q, "search")))
+    : [];
+  const cpfSerpApiResults = cpfQueries.length
+    ? await Promise.all(cpfQueries.map((q) => searchWithSerpApi(q)))
+    : [];
+  const cpfInfosimplesResults = cpfQueries.length
+    ? await Promise.all(cpfQueries.map((q) => searchWithInfosimples(q)))
+    : [];
+
   const organicResults = mergeSearchResults([
     ...webResults,
     ...siteResults,
     ...newsResults,
-    ...infosimplesResults,
     ...serpApiResults,
+    ...infosimplesResults,
     datajudResults,
+    ...cpfSerperResults,
+    ...cpfSerpApiResults,
+    ...cpfInfosimplesResults,
   ]);
 
   const searchResultsContext =
