@@ -25,11 +25,43 @@ function formatCpf(value: string): string {
   return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
 }
 
+const BR_UF_SELECT: { value: string; label: string }[] = [
+  { value: '', label: 'Estado (opcional)' },
+  { value: 'AC', label: 'AC — Acre' },
+  { value: 'AL', label: 'AL — Alagoas' },
+  { value: 'AP', label: 'AP — Amapá' },
+  { value: 'AM', label: 'AM — Amazonas' },
+  { value: 'BA', label: 'BA — Bahia' },
+  { value: 'CE', label: 'CE — Ceará' },
+  { value: 'DF', label: 'DF — Distrito Federal' },
+  { value: 'ES', label: 'ES — Espírito Santo' },
+  { value: 'GO', label: 'GO — Goiás' },
+  { value: 'MA', label: 'MA — Maranhão' },
+  { value: 'MT', label: 'MT — Mato Grosso' },
+  { value: 'MS', label: 'MS — Mato Grosso do Sul' },
+  { value: 'MG', label: 'MG — Minas Gerais' },
+  { value: 'PA', label: 'PA — Pará' },
+  { value: 'PB', label: 'PB — Paraíba' },
+  { value: 'PR', label: 'PR — Paraná' },
+  { value: 'PE', label: 'PE — Pernambuco' },
+  { value: 'PI', label: 'PI — Piauí' },
+  { value: 'RJ', label: 'RJ — Rio de Janeiro' },
+  { value: 'RN', label: 'RN — Rio Grande do Norte' },
+  { value: 'RS', label: 'RS — Rio Grande do Sul' },
+  { value: 'RO', label: 'RO — Rondônia' },
+  { value: 'RR', label: 'RR — Roraima' },
+  { value: 'SC', label: 'SC — Santa Catarina' },
+  { value: 'SP', label: 'SP — São Paulo' },
+  { value: 'SE', label: 'SE — Sergipe' },
+  { value: 'TO', label: 'TO — Tocantins' },
+];
+
 export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading, cooldownSeconds = 0, candidato }) => {
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
   const [referenceUrls, setReferenceUrls] = useState<string[]>(['']);
   const [cpf, setCpf] = useState('');
+  const [stateUf, setStateUf] = useState('');
   const [searchProcessoTrabalhista, setSearchProcessoTrabalhista] = useState(true);
   const [searchOutrosTiposProcesso, setSearchOutrosTiposProcesso] = useState(true);
 
@@ -40,6 +72,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       setRole(mapped.role);
       setReferenceUrls(mapped.referenceUrls.length > 0 ? mapped.referenceUrls : ['']);
       setCpf(mapped.cpf ? formatCpf(mapped.cpf) : '');
+      setStateUf(mapped.state ?? '');
     }
   }, [candidato]);
 
@@ -72,6 +105,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       role: mapped.role,
       referenceUrls: mapped.referenceUrls.filter((u) => u && u.trim()),
       ...(cpfOnlyDigits.length === 11 && { cpf: cpfOnlyDigits }),
+      ...(stateUf.length === 2 && { state: stateUf }),
       searchProcessoTrabalhista,
       searchOutrosTiposProcesso,
       candidato,
@@ -86,6 +120,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       role,
       referenceUrls: referenceUrls.filter((u) => u && u.trim()),
       ...(cpfOnlyDigits.length === 11 && { cpf: cpfOnlyDigits }),
+      ...(stateUf.length === 2 && { state: stateUf }),
       searchProcessoTrabalhista,
       searchOutrosTiposProcesso,
     });
@@ -124,6 +159,22 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
               onChange={(e) => setCpf(formatCpf(e.target.value))}
             />
             <p className="text-[10px] text-slate-500 mt-1 ml-1">Se informado, será usado na análise e no Datajud.</p>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Estado (UF) — opcional</label>
+            <select
+              disabled={isLoading || cooldownSeconds > 0}
+              value={stateUf}
+              onChange={(e) => setStateUf(e.target.value)}
+              className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 text-white disabled:opacity-50"
+            >
+              {BR_UF_SELECT.map((opt) => (
+                <option key={opt.value || '_'} value={opt.value} className="bg-slate-900">
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <p className="text-[10px] text-slate-500 mt-1 ml-1">Refina buscas web por região (nome + estado).</p>
           </div>
           <div>
             <p className="block text-xs font-bold text-slate-400 uppercase mb-2 ml-1">Busca por processo (Datajud)</p>
@@ -224,6 +275,22 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
             value={role}
             onChange={(e) => setRole(e.target.value)}
           />
+        </div>
+        <div>
+          <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Estado (UF) — opcional</label>
+          <select
+            disabled={isLoading || cooldownSeconds > 0}
+            value={stateUf}
+            onChange={(e) => setStateUf(e.target.value)}
+            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 text-white disabled:opacity-50"
+          >
+            {BR_UF_SELECT.map((opt) => (
+              <option key={opt.value || '_'} value={opt.value} className="bg-slate-900">
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-[10px] text-slate-500 mt-1 ml-1">Refina buscas (Serper, SerpApi, InfoSimples) com nome + estado.</p>
         </div>
         <div>
           <div className="flex justify-between items-center mb-1.5 ml-1">

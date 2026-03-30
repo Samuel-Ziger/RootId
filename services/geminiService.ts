@@ -470,6 +470,23 @@ function extractSearchableTextFromObject(obj: unknown, maxWords = 12): string[] 
 
 const MAX_QUERIES_PER_CATEGORY = 12; // limite por categoria para não estourar cota Serper
 
+/** UF → nome do estado para enriquecer queries (Google Brasil) */
+const BR_UF_NOME: Record<string, string> = {
+  AC: "Acre", AL: "Alagoas", AP: "Amapá", AM: "Amazonas", BA: "Bahia", CE: "Ceará", DF: "Distrito Federal",
+  ES: "Espírito Santo", GO: "Goiás", MA: "Maranhão", MT: "Mato Grosso", MS: "Mato Grosso do Sul", MG: "Minas Gerais",
+  PA: "Pará", PB: "Paraíba", PR: "Paraná", PE: "Pernambuco", PI: "Piauí", RJ: "Rio de Janeiro", RN: "Rio Grande do Norte",
+  RS: "Rio Grande do Sul", RO: "Rondônia", RR: "Roraima", SC: "Santa Catarina", SP: "São Paulo", SE: "Sergipe",
+  TO: "Tocantins",
+};
+
+function resolveUfForSearch(data: CandidateDataInput): { uf?: string; nomeEstado?: string } {
+  const raw = (data.state ?? data.candidato?.state ?? "").trim().toUpperCase().replace(/[^A-Z]/g, "");
+  const uf = raw.length >= 2 ? raw.slice(0, 2) : "";
+  if (!uf) return {};
+  const nomeEstado = BR_UF_NOME[uf];
+  return { uf, nomeEstado };
+}
+
 /** Monta queries usando TODOS os dados fornecidos: todos os links, experiências, educações, habilidades e currículo */
 function buildSearchQueries(data: CandidateDataInput): {
   web: string[];
@@ -477,6 +494,7 @@ function buildSearchQueries(data: CandidateDataInput): {
   news: string[];
 } {
   const { name, role, referenceUrls = [], candidato } = data;
+  const { uf, nomeEstado } = resolveUfForSearch(data);
   const nome = normalizeNameForSearch(name);
   const urls = referenceUrls.filter((u) => u && u.trim());
   const domains = extractSearchableDomains(urls);
@@ -650,6 +668,25 @@ function buildSearchQueries(data: CandidateDataInput): {
     const city = candidato.cidade || candidato.city;
     if (city && String(city).trim().length > 2) {
       web.push(`${q(priorityNames[0])} ${String(city).trim()}`);
+      if (nomeEstado) web.push(`${q(priorityNames[0])} ${String(city).trim()} ${nomeEstado}`);
+      if (uf) web.push(`${q(priorityNames[0])} ${String(city).trim()} ${uf}`);
+    }
+  }
+
+  // —— Estado / UF (formulário ou candidato): nome + estado para precisão regional ——
+  if (priorityNames.length > 0 && (nomeEstado || uf)) {
+    for (const n of priorityNames.slice(0, 4)) {
+      if (!n || n.length < 3) continue;
+      if (nomeEstado) {
+        web.push(`${q(n)} ${nomeEstado}`);
+        if (role) web.push(`${q(n)} ${role} ${nomeEstado}`);
+        web.push(`${q(n)} linkedin ${nomeEstado}`);
+      }
+      if (uf) {
+        web.push(`${q(n)} ${uf}`);
+        if (role) web.push(`${q(n)} ${role} ${uf}`);
+        web.push(`${q(n)} linkedin ${uf}`);
+      }
     }
   }
 
@@ -657,6 +694,8 @@ function buildSearchQueries(data: CandidateDataInput): {
   for (const n of priorityNames.slice(0, 4)) {
     news.push(q(n));
     if (role) news.push(`${q(n)} ${role}`);
+    if (nomeEstado) news.push(`${q(n)} ${nomeEstado}`);
+    if (uf) news.push(`${q(n)} ${uf}`);
   }
 
   const dedupe = (arr: string[]) => [...new Set(arr)];
@@ -690,12 +729,19 @@ function buildOSINTPrompt(data: CandidateDataInput, searchResultsContext: string
       ? String(data.cpf).replace(/\D/g, "").replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")
       : "";
   const cpfBlock = cpfDisplay ? `\n- CPF (informado pelo candidato): ${cpfDisplay}. Use para cruzar com processos no Datajud e com menções em fontes quando relevante.` : "";
+  const { uf: ufPrompt, nomeEstado: nomeEstadoPrompt } = resolveUfForSearch(data);
+  const stateBlock =
+    ufPrompt && nomeEstadoPrompt
+      ? `\n- Estado (UF) para refinamento regional: ${ufPrompt} (${nomeEstadoPrompt}). Priorize achados e perfis coerentes com essa localização quando fizer sentido.`
+      : ufPrompt
+        ? `\n- Estado (UF) para refinamento regional: ${ufPrompt}. Priorize achados coerentes com essa UF quando fizer sentido.`
+        : "";
 
   return `Você é um analista OSINT rigoroso. Sua tarefa é CRUZAR todos os dados fornecidos com os resultados da web.
 
 DADOS DO CANDIDATO:
 - Nome completo: ${data.name}
-- Cargo/Área: ${data.role}${cpfBlock}
+- Cargo/Área: ${data.role}${cpfBlock}${stateBlock}
 ${linksBlock}
 ${nameVariationsBlock}
 
@@ -816,10 +862,19 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
   const cpfQueries: string[] = [];
   if (datajudCpf) {
     const cpfFormatado = datajudCpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+    const { uf: ufCpf, nomeEstado: nomeCpf } = resolveUfForSearch(data);
     cpfQueries.push(`"${datajudCpf}"`);
     cpfQueries.push(`"${cpfFormatado}"`);
     cpfQueries.push(`"${data.name}" "${datajudCpf}"`);
     cpfQueries.push(`"${data.name}" "${cpfFormatado}"`);
+    if (nomeCpf) {
+      cpfQueries.push(`"${data.name}" "${datajudCpf}" ${nomeCpf}`);
+      cpfQueries.push(`"${data.name}" "${cpfFormatado}" ${nomeCpf}`);
+    }
+    if (ufCpf) {
+      cpfQueries.push(`"${datajudCpf}" ${ufCpf}`);
+      cpfQueries.push(`"${data.name}" "${datajudCpf}" ${ufCpf}`);
+    }
   }
 
   const cpfSerperResults = cpfQueries.length

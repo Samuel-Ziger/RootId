@@ -7,6 +7,8 @@ export interface CandidateData {
   referenceUrls: string[];
   /** CPF (opcional). Se informado, será usado na análise e em buscas no Datajud. */
   cpf?: string;
+  /** UF (opcional), ex.: SP, RJ. Refina buscas web (nome + estado) para maior precisão regional. */
+  state?: string;
   /** Incluir processos trabalhistas (TRT/TST) na busca Datajud. Padrão true. */
   searchProcessoTrabalhista?: boolean;
   /** Incluir outros tipos de processo (TJ, TRF, STJ) na busca Datajud. Padrão true. */

@@ -57,6 +57,9 @@ export function mapCandidatoToRootID(
   const referenceUrls = extractReferenceUrls(candidato);
 
   const cpf = overrides?.cpf ?? candidato.cpf;
+  const stateRaw = overrides?.state ?? candidato.state;
+  const state =
+    stateRaw && typeof stateRaw === "string" ? stateRaw.trim().toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2) : "";
   return {
     name: overrides?.name ?? nome,
     role: overrides?.role ?? role,
@@ -67,6 +70,7 @@ export function mapCandidatoToRootID(
           ? referenceUrls
           : [""],
     ...(cpf && { cpf: typeof cpf === "string" ? cpf.trim() : String(cpf) }),
+    ...(state.length === 2 && { state }),
   };
 }
 
