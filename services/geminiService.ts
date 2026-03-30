@@ -745,12 +745,175 @@ function collectLinkedinInSlugs(data: CandidateDataInput): string[] {
   return out;
 }
 
+/** URL canônica do perfil para collect Coresignal (um perfil por análise — créditos API). */
+function normalizeLinkedinProfileUrlFromAny(raw: string): string | null {
+  const slug = extractLinkedinInSlug(raw);
+  if (!slug) return null;
+  return `https://www.linkedin.com/in/${slug}`;
+}
+
+function collectLinkedinProfileUrls(data: CandidateDataInput): string[] {
+  const urls: string[] = [...(data.referenceUrls || []).map(String)].filter(Boolean);
+  const c = data.candidato;
+  if (c?.linkedin) urls.push(String(c.linkedin));
+  const socials = (c?.redes_sociais || c?.socials || {}) as { linkedin?: string };
+  if (socials.linkedin) urls.push(String(socials.linkedin));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of urls) {
+    const n = normalizeLinkedinProfileUrlFromAny(u);
+    if (n && !seen.has(n.toLowerCase())) {
+      seen.add(n.toLowerCase());
+      out.push(n);
+    }
+  }
+  return out.slice(0, 1);
+}
+
+// --- Coresignal Multi-source Employee API (collect por URL do LinkedIn) ---
+const CORESIGNAL_CDAPI_BASE = "https://api.coresignal.com/cdapi/v2";
+
+const getCoresignalApiKey = () =>
+  (process.env.CORESIGNAL_API_KEY || process.env.VITE_CORESIGNAL_API_KEY || "").trim();
+
+/** Collect employee_multi_source; tenta URL codificada e, em seguida, só o slug. */
+async function fetchCoresignalEmployeeForLinkedin(
+  data: CandidateDataInput
+): Promise<Record<string, unknown> | null> {
+  const apikey = getCoresignalApiKey();
+  if (!apikey) return null;
+  const profileUrls = collectLinkedinProfileUrls(data);
+  if (profileUrls.length === 0) return null;
+  const linkedinUrl = profileUrls[0];
+  const slug = extractLinkedinInSlug(linkedinUrl);
+  const segments = [encodeURIComponent(linkedinUrl)];
+  if (slug) segments.push(encodeURIComponent(slug));
+
+  for (const segment of segments) {
+    const url = `${CORESIGNAL_CDAPI_BASE}/employee_multi_source/collect/${segment}`;
+    try {
+      const res = await fetch(url, {
+        headers: {
+          accept: "application/json",
+          apikey,
+        },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json && typeof json === "object") return json as Record<string, unknown>;
+        return null;
+      }
+      if (res.status === 401) {
+        console.warn(
+          "Coresignal: chave inválida ou sem permissão. Defina CORESIGNAL_API_KEY no .env (header apikey)."
+        );
+        return null;
+      }
+      if (res.status === 402 || res.status === 403) {
+        const t = await res.text().catch(() => "");
+        console.warn("Coresignal:", res.status, t.slice(0, 160));
+        return null;
+      }
+    } catch (e) {
+      console.warn("Coresignal collect:", e);
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Texto para o prompt; omite salários e projeções financeiras. */
+function formatCoresignalEmployeeMarkdown(record: Record<string, unknown>): string {
+  const lines: string[] = [];
+  const s = (v: unknown) => (v != null && String(v).trim() ? String(v).trim() : "");
+
+  lines.push("### Coresignal (Multi-source Employee — collect por URL do LinkedIn)");
+  if (s(record.professional_network_url)) lines.push(`- URL perfil (rede profissional): ${s(record.professional_network_url)}`);
+  if (s(record.full_name)) lines.push(`- Nome: ${s(record.full_name)}`);
+  if (s(record.headline)) lines.push(`- Headline: ${s(record.headline)}`);
+  if (s(record.summary)) {
+    const sum = s(record.summary);
+    lines.push(`- Resumo: ${sum.slice(0, 1500)}${sum.length > 1500 ? "…" : ""}`);
+  }
+  if (s(record.location_full)) lines.push(`- Localização: ${s(record.location_full)}`);
+  else if (s(record.location_city) || s(record.location_country)) {
+    lines.push(`- Localização: ${[s(record.location_city), s(record.location_state), s(record.location_country)].filter(Boolean).join(", ")}`);
+  }
+  if (s(record.website)) lines.push(`- Website: ${s(record.website)}`);
+  if (s(record.services)) {
+    const sv = s(record.services);
+    lines.push(`- Serviços declarados: ${sv.slice(0, 500)}${sv.length > 500 ? "…" : ""}`);
+  }
+  const pc = record.connections_count;
+  const fc = record.followers_count;
+  if (typeof pc === "number" || typeof fc === "number") {
+    lines.push(`- Conexões / seguidores: ${typeof pc === "number" ? pc : "?"} / ${typeof fc === "number" ? fc : "?"}`);
+  }
+
+  const interests = record.interests;
+  if (Array.isArray(interests) && interests.length > 0) {
+    lines.push(`- Interesses: ${interests.slice(0, 25).map((x) => String(x)).join(", ")}`);
+  }
+  const skills = record.inferred_skills;
+  if (Array.isArray(skills) && skills.length > 0) {
+    lines.push(`- Habilidades inferidas: ${skills.slice(0, 45).map((x) => String(x)).join(", ")}`);
+  }
+
+  const pemail = record.primary_professional_email;
+  if (s(pemail)) lines.push(`- E-mail profissional (campo do fornecedor): ${s(pemail)}`);
+
+  const exp = record.experience;
+  if (Array.isArray(exp) && exp.length > 0) {
+    lines.push("### Experiências (Coresignal)");
+    for (const item of exp.slice(0, 22)) {
+      const e = item as Record<string, unknown>;
+      const title = s(e.position_title);
+      const comp = s(e.company_name);
+      const from = s(e.date_from);
+      const to = s(e.date_to);
+      const loc = s(e.location);
+      lines.push(`  - ${title || "?"} @ ${comp || "?"} (${from || "?"} – ${to || "?"})${loc ? ` — ${loc}` : ""}`);
+    }
+  }
+
+  const edu = record.education;
+  if (Array.isArray(edu) && edu.length > 0) {
+    lines.push("### Formação (Coresignal)");
+    for (const item of edu.slice(0, 12)) {
+      const e = item as Record<string, unknown>;
+      const period =
+        s(e.date_from) && s(e.date_to)
+          ? `${s(e.date_from)} – ${s(e.date_to)}`
+          : [e.date_from_year, e.date_to_year].filter((y) => y != null).join(" – ");
+      lines.push(
+        `  - ${s(e.degree) || s(e.field_of_study) || "Formação"} — ${s(e.institution_name) || "?"} (${period || "?"})`
+      );
+    }
+  }
+
+  const langs = record.languages;
+  if (Array.isArray(langs) && langs.length > 0) {
+    lines.push(
+      `### Idiomas (Coresignal)\n${langs.slice(0, 15).map((x) => `  - ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n")}`
+    );
+  }
+
+  let body = lines.join("\n");
+  const max = 14000;
+  if (body.length > max) body = `${body.slice(0, max)}\n… (truncado para limite do prompt)`;
+  return `\nDADOS DO LINKEDIN / REDE PROFISSIONAL (API Coresignal \`employee_multi_source/collect\` — evidência **Alta** para o que está listado aqui; **não** trate como resultado web [n]):\n${body}\n`;
+}
+
 /** Monta queries usando TODOS os dados fornecidos: todos os links, experiências, educações, habilidades e currículo */
-function buildSearchQueries(data: CandidateDataInput): {
+function buildSearchQueries(
+  data: CandidateDataInput,
+  opts?: { skipLinkedinSerpQueries?: boolean }
+): {
   web: string[];
   site: string[];
   news: string[];
 } {
+  const skipLi = opts?.skipLinkedinSerpQueries === true;
   const { name, role, referenceUrls = [], candidato } = data;
   const { uf, nomeEstado } = resolveUfForSearch(data);
   const cityDeclared = resolveCityDeclared(data);
@@ -782,14 +945,19 @@ function buildSearchQueries(data: CandidateDataInput): {
     if (dom) {
       web.push(`${q(priorityNames[0])} ${dom}`);
       web.push(`"${dom}" ${q(priorityNames[0])}`);
-      web.push(`site:linkedin.com ${q(priorityNames[0])} ${dom}`);
+      if (!skipLi) web.push(`site:linkedin.com ${q(priorityNames[0])} ${dom}`);
     }
   }
 
   // —— Nome + plataformas e emprego ——
   for (const n of priorityNames.slice(0, 3)) {
-    web.push(`${q(n)} linkedin OR github OR portfolio`);
-    web.push(`${q(n)} trabalhou OR "works at" OR "working at"`);
+    if (skipLi) {
+      web.push(`${q(n)} github OR portfolio`);
+      web.push(`${q(n)} trabalhou OR "works at" OR "working at"`);
+    } else {
+      web.push(`${q(n)} linkedin OR github OR portfolio`);
+      web.push(`${q(n)} trabalhou OR "works at" OR "working at"`);
+    }
   }
 
   // —— TODAS as experiências: nome + empresa e nome + cargo/título ——
@@ -883,8 +1051,8 @@ function buildSearchQueries(data: CandidateDataInput): {
     }
   }
 
-  // —— LinkedIn: busca detalhada — experiências, títulos, projetos (e links), destaques, links do perfil ——
-  if (priorityNames.length > 0) {
+  // —— LinkedIn: busca detalhada (omitida se já houver collect Coresignal por URL) ——
+  if (!skipLi && priorityNames.length > 0) {
     const n = priorityNames[0];
     web.push(`${q(n)} linkedin profile`);
     web.push(`${q(n)} linkedin experience`);
@@ -898,7 +1066,7 @@ function buildSearchQueries(data: CandidateDataInput): {
     web.push(`${q(n)} linkedin contact`);
   }
   // Por empresa/instituição do candidato + LinkedIn (para achar experiências específicas)
-  if (candidato && priorityNames.length > 0) {
+  if (!skipLi && candidato && priorityNames.length > 0) {
     const exp = candidato.experiences || candidato.experiencia;
     if (exp && Array.isArray(exp)) {
       const companies = exp
@@ -910,7 +1078,7 @@ function buildSearchQueries(data: CandidateDataInput): {
     }
   }
   // Por projeto (se tiver título) para achar link do projeto
-  if (candidato?.projects && Array.isArray(candidato.projects) && priorityNames.length > 0) {
+  if (!skipLi && candidato?.projects && Array.isArray(candidato.projects) && priorityNames.length > 0) {
     const n = priorityNames[0];
     for (const proj of candidato.projects.slice(0, 5)) {
       const title = (proj as { title?: string }).title;
@@ -922,6 +1090,7 @@ function buildSearchQueries(data: CandidateDataInput): {
 
   // —— TODOS os links: buscas site: para cada domínio (e 2ª variação de nome quando houver) ——
   for (const { domain, slug } of domains) {
+    if (skipLi && domain === "linkedin.com") continue;
     if (slug) {
       site.push(`site:${domain} ${slug}`);
       if (priorityNames[1] && priorityNames[1] !== priorityNames[0]) {
@@ -933,10 +1102,12 @@ function buildSearchQueries(data: CandidateDataInput): {
   }
 
   // —— Rodada fechada: slug LinkedIn e login GitHub dos próprios links (menos homônimos) ——
-  for (const slug of collectLinkedinInSlugs(data)) {
-    site.push(`site:linkedin.com/in/${slug}`);
-    site.push(`site:linkedin.com/in "${slug}"`);
-    if (priorityNames[0]) site.push(`site:linkedin.com/in ${q(priorityNames[0])}`);
+  if (!skipLi) {
+    for (const slug of collectLinkedinInSlugs(data)) {
+      site.push(`site:linkedin.com/in/${slug}`);
+      site.push(`site:linkedin.com/in "${slug}"`);
+      if (priorityNames[0]) site.push(`site:linkedin.com/in ${q(priorityNames[0])}`);
+    }
   }
   for (const ghLogin of collectGithubLogins(data)) {
     site.push(`site:github.com/${ghLogin}`);
@@ -967,12 +1138,12 @@ function buildSearchQueries(data: CandidateDataInput): {
       if (nomeEstado) {
         web.push(`${q(n)} ${nomeEstado}`);
         if (role) web.push(`${q(n)} ${role} ${nomeEstado}`);
-        web.push(`${q(n)} linkedin ${nomeEstado}`);
+        if (!skipLi) web.push(`${q(n)} linkedin ${nomeEstado}`);
       }
       if (uf) {
         web.push(`${q(n)} ${uf}`);
         if (role) web.push(`${q(n)} ${role} ${uf}`);
-        web.push(`${q(n)} linkedin ${uf}`);
+        if (!skipLi) web.push(`${q(n)} linkedin ${uf}`);
       }
     }
   }
@@ -997,7 +1168,12 @@ const SYSTEM_INSTRUCTION =
   "Você é o analista OSINT Ache um Veterano IA. Dimensões: (1) Consistência — cruze nome, variações e links com a web. (2) Aderência à área de interesse — avalie se o que foi encontrado CONDIZ com a área/cargo declarado pelo candidato. (3) Risco — avalie perigo para a empresa: discurso agressivo, fraude relatada, comportamento incompatível. (4) Atentado/má conduta na internet — relate explicitamente se há indícios de fraude, golpe, assédio, crimes cibernéticos ou atentado à honra; se não houver, diga claramente. SEMPRE classifique evidências: Alta (fonte primária), Média (agregador), Baixa (inferência). Nunca invente — só cite o que está nos resultados da busca. Separe claramente fatos vindos da API GitHub do que vem só da lista de resultados web [n].";
 
 /** Heurísticas baratas pós-agregação (não substituem análise humana). */
-function buildLightValidationHints(data: CandidateDataInput, githubApiMarkdown: string, items: SearchItem[]): string {
+function buildLightValidationHints(
+  data: CandidateDataInput,
+  githubApiMarkdown: string,
+  items: SearchItem[],
+  linkedinFromCoresignal = false
+): string {
   const hints: string[] = [];
   const linkBlob = items.map((i) => (i.link || "").toLowerCase()).join(" ");
 
@@ -1010,21 +1186,33 @@ function buildLightValidationHints(data: CandidateDataInput, githubApiMarkdown: 
       hints.push(`GitHub: havia link para "${login}" mas não houve bloco da API (token, limite ou indisponibilidade).`);
   }
 
-  for (const slug of collectLinkedinInSlugs(data)) {
-    const needle = `linkedin.com/in/${slug.toLowerCase()}`;
-    if (linkBlob.includes(needle))
-      hints.push(`LinkedIn: o slug /in/${slug} aparece em pelo menos um link entre os resultados agregados.`);
-    else
-      hints.push(
-        `LinkedIn: o slug /in/${slug} não aparece literalmente nos links listados nos resultados — pode constar em outras páginas não capturadas.`
-      );
+  if (linkedinFromCoresignal) {
+    hints.push(
+      `LinkedIn: perfil carregado via Coresignal (collect por URL); use esse bloco como fonte principal de carreira — buscas Serper focadas em LinkedIn foram omitidas.`
+    );
+  } else {
+    for (const slug of collectLinkedinInSlugs(data)) {
+      const needle = `linkedin.com/in/${slug.toLowerCase()}`;
+      if (linkBlob.includes(needle))
+        hints.push(`LinkedIn: o slug /in/${slug} aparece em pelo menos um link entre os resultados agregados.`);
+      else
+        hints.push(
+          `LinkedIn: o slug /in/${slug} não aparece literalmente nos links listados nos resultados — pode constar em outras páginas não capturadas.`
+        );
+    }
   }
 
   if (hints.length === 0) return "";
   return `CHECAGENS AUTOMÁTICAS (metadados — use como apoio, não como prova sozinha):\n${hints.map((h) => `- ${h}`).join("\n")}\n`;
 }
 
-function buildOSINTPrompt(data: CandidateDataInput, searchResultsContext: string, githubApiContext = "", validationHints = ""): string {
+function buildOSINTPrompt(
+  data: CandidateDataInput,
+  searchResultsContext: string,
+  githubApiContext = "",
+  validationHints = "",
+  coresignalContext = ""
+): string {
   const urls = data.referenceUrls?.filter(Boolean) || [];
   const linksBlock =
     urls.length > 0
@@ -1065,17 +1253,19 @@ DADOS DO CANDIDATO:
 - Nome completo: ${data.name}
 - Cargo/Área: ${data.role}${cpfBlock}${stateBlock}${cityEmailBlock}
 ${linksBlock}
+${coresignalContext}
 ${githubApiContext}
 ${validationHints ? `${validationHints}\n` : ""}
 ${nameVariationsBlock}
 
 ORIGEM DOS DADOS — NÃO MISTURE SEM ROTULAR:
+- Bloco "DADOS DO LINKEDIN / REDE PROFISSIONAL (API Coresignal)" = fatos do **collect** Coresignal (\`employee_multi_source\`) pela URL do LinkedIn. Evidência **Alta** para carreira/experiências neste bloco; **não** cite como [n] da lista web.
 - Bloco "DADOS DO GITHUB (API REST oficial)" = **somente** fatos retornados pela API GitHub (perfil, repos, orgs, eventos públicos). Não extrapole além desse bloco para GitHub.
 - "DADOS ADICIONAIS DO CANDIDATO" = cadastro/plataforma (inclui e-mail e telefone quando fornecidos).
 - "RESULTADOS DA WEB" abaixo = trechos da busca web; ao citar, use **[n]** conforme a lista.
 - Para GitHub: prefira o bloco da API; use [n] só para o que vier explicitamente dos resultados web.
 
-IMPORTANTE: Se existir o bloco "DADOS DO GITHUB (API REST oficial)" acima, use-o como fonte primária para GitHub (bio, local, repos públicos, linguagens). O nome completo (ex: "Samuel Henryk de Souza Ziger") MAL EXISTE na web. A pessoa aparece como "Samuel Ziger" ou "samuel-ziger". O LINK contém a pista: linkedin.com/in/samuel-ziger-237524357 → "samuel-ziger" (antes do número) = "Samuel Ziger" com espaço. É a MESMA PESSOA. Valide cruzando todas as variações.
+IMPORTANTE: Se existir o bloco Coresignal acima, use-o como fonte **principal** para headline, resumo, experiências e formação profissional do LinkedIn; use "DADOS ADICIONAIS" para recomendações/outros itens que a API não liste. Se existir o bloco "DADOS DO GITHUB (API REST oficial)" acima, use-o como fonte primária para GitHub (bio, local, repos públicos, linguagens). O nome completo (ex: "Samuel Henryk de Souza Ziger") MAL EXISTE na web. A pessoa aparece como "Samuel Ziger" ou "samuel-ziger". O LINK contém a pista: linkedin.com/in/samuel-ziger-237524357 → "samuel-ziger" (antes do número) = "Samuel Ziger" com espaço. É a MESMA PESSOA. Valide cruzando todas as variações.
 
 ${enrichedContext}
 
@@ -1084,7 +1274,7 @@ REGRAS PARA RECOMENDAÇÕES LINKEDIN: Se nos "DADOS ADICIONAIS DO CANDIDATO" aci
 RESULTADOS DA WEB (trechos indexados — cite com [n]; não confunda com a API GitHub):
 ${searchResultsContext}
 
-CONTEXTO LINKEDIN/PERFIL: A seção "Dados coletados do LinkedIn" deve ser uma BUSCA DETALHADA. Use em primeiro lugar os "DADOS ADICIONAIS" (incluindo recomendações, experiências, projetos, destaques) e depois os "RESULTADOS DA WEB". Para o item (h) Recomendações: se houver "Recomendações recebidas" nos DADOS ADICIONAIS, liste TODAS aqui; senão, use o que encontrar nos resultados da busca; só escreva "nenhuma recomendação encontrada" se não houver em nenhuma das duas fontes.
+CONTEXTO LINKEDIN/PERFIL: A seção "Dados coletados do LinkedIn" deve ser detalhada. Ordem de prioridade: (1) bloco **Coresignal** se existir; (2) "DADOS ADICIONAIS" (recomendações, projetos, destaques que o fornecedor não cobriu); (3) "RESULTADOS DA WEB" [n]. Para o item (h) Recomendações: se houver nos DADOS ADICIONAIS, liste TODAS; senão, use os resultados da busca; só escreva "nenhuma recomendação encontrada" se não houver em nenhuma fonte.
 
 TAREFA – Cruzamento obrigatório:
 1. Cruze NOME (e variações: primeiro+último, slug do link como "samuel-ziger") com cada LINK. O username na URL (ex: /in/samuel-ziger) é o perfil real — valide se os resultados da busca correspondem a essa pessoa.
@@ -1094,7 +1284,7 @@ TAREFA – Cruzamento obrigatório:
 5. Identifique divergências: dados que não batem entre o declarado e o encontrado.
 6. AVALIE RISCO REPUTACIONAL: discurso agressivo, fraude/golpe relatado, comportamento incompatível com o cargo pretendido. Empresas precisam medir "perigo", não só "verdade".
 7. CLASSIFIQUE a confiança de cada evidência citada (Anti-alucinação): só cite evidências com classificação explícita.
-8. LINKEDIN (busca detalhada): Na seção "Dados coletados do LinkedIn" liste de forma DETALHADA: (a) link do perfil; (b) TODAS as experiências com cargo/título e empresa; (c) formação; (d) TODOS os projetos — e para cada projeto, se aparecer link (URL) nos resultados ou nos dados, inclua-o; (e) TODOS os destaques — e verifique se há links ou referências a outros sites nos destaques; (f) idiomas; (g) habilidades; (h) recomendações; (i) TODOS os outros links do perfil (website, blog, etc.). Cruze cada item com os RESULTADOS DA WEB. Se não houver link LinkedIn ou dados identificados como do LinkedIn, indique "Nenhum dado de perfil LinkedIn informado ou encontrado nas fontes."
+8. LINKEDIN: Na seção "Dados coletados do LinkedIn" liste (a) link do perfil; (b) experiências; (c) formação; (d) projetos com URL se houver em Coresignal, DADOS ADICIONAIS ou [n]; (e) destaques; (f) idiomas; (g) habilidades; (h) recomendações; (i) outros links do perfil. Se houver Coresignal, baseie (b)(c)(f)(g) principalmente nele. Se não houver link LinkedIn nem Coresignal nem dados identificáveis, indique "Nenhum dado de perfil LinkedIn informado ou encontrado nas fontes."
 9. ÁREA DE INTERESSE: O candidato declarou área/cargo de interesse (veja em "DADOS ADICIONAIS"). Avalie se o que foi encontrado na web CONDIZ com essa área (mesma área técnica, cargos compatíveis, projetos ou formação alinhados). O relatório DEVE ter uma seção dedicada dizendo se o perfil digital encontrado está alinhado ou não à área de interesse declarada.
 10. PROCESSOS JUDICIAIS: Nos RESULTADOS DA WEB podem constar entradas do Datajud (CNJ) com título no formato "Processo [número] (TRIBUNAL)" e link para o CNJ. Liste TODOS esses processos na seção "Processos judiciais" do relatório: número do processo, tribunal (ex.: STJ, TST, TRT1, TJSP, TRF1), classe/órgão/assuntos quando disponíveis no resumo, e link da fonte [n]. Se não houver nenhum processo nas fontes, escreva: "Nenhum processo judicial encontrado nas bases consultadas (Datajud)."
 
@@ -1107,8 +1297,8 @@ Relatório em Português (Brasil), seguindo EXATAMENTE estas seções:
    - **Alta (Fonte primária)**: encontrada diretamente em perfil oficial, site da empresa, publicação do próprio candidato.
    - **Média (Agregador)**: encontrada em sites de notícias, agregadores, perfis de terceiros.
    - **Baixa (Inferência)**: dedução ou associação sem confirmação direta — use com cautela.
-   Imediatamente abaixo, inclua uma **Tabela Declarado vs encontrado** (Markdown) com colunas: | Campo | Declarado | Encontrado nas fontes | Origem (API GitHub / DADOS ADICIONAIS / [n] / —) | Confiança |. Use **—** quando não houver dado declarado ou nenhum achado. Inclua linhas para: nome, cidade, UF, e-mail ou domínio, slug LinkedIn, login GitHub, CPF (só se declarado), e pelo menos uma linha de experiência ou cargo se houver nos DADOS ADICIONAIS.
-3. **Dados coletados do LinkedIn** (busca detalhada): Seção focada na coleta COMPLETA e DETALHADA de dados vindos do LinkedIn. Liste TUDO que constar do perfil (nos dados do candidato e/ou nos resultados da busca), com o máximo de detalhe: (a) Link do perfil LinkedIn; (b) **Todas as experiências profissionais** — cada uma com cargo/título, empresa e período; (c) Formação acadêmica; (d) **Todos os projetos** — cada projeto com título, descrição e, se houver link (URL) associado ao projeto nos dados ou nos resultados, inclua-o; (e) **Todos os destaques** — liste cada destaque e verifique se há links ou referências a outros sites (inclua-os); (f) Idiomas; (g) Habilidades; (h) **Recomendações** — PRIMEIRO confira nos "DADOS ADICIONAIS DO CANDIDATO" se existe a seção "Recomendações recebidas". Se existir, liste TODAS aqui (autor, cargo do recomendador se houver, trecho). Se não houver nos DADOS ADICIONAIS, use as encontradas nos RESULTADOS DA WEB com fonte [n]. Só escreva "Nenhuma recomendação encontrada nas fontes consultadas" se não houver recomendações em nenhuma das duas fontes. (i) **Todos os outros links** adicionados no perfil (website, blog, portfólio, redes, etc.). Use os "DADOS ADICIONAIS" e os "RESULTADOS DA WEB" para preencher. Cite a fonte [n] quando a informação vier dos resultados da busca. Se não houver link de LinkedIn ou nenhum dado identificável como do perfil LinkedIn, escreva: "Nenhum dado de perfil LinkedIn informado ou encontrado nas fontes consultadas."
+   Imediatamente abaixo, inclua uma **Tabela Declarado vs encontrado** (Markdown) com colunas: | Campo | Declarado | Encontrado nas fontes | Origem (Coresignal / API GitHub / DADOS ADICIONAIS / [n] / —) | Confiança |. Use **—** quando não houver dado declarado ou nenhum achado. Inclua linhas para: nome, cidade, UF, e-mail ou domínio, slug LinkedIn, login GitHub, CPF (só se declarado), e pelo menos uma linha de experiência ou cargo se houver nos DADOS ADICIONAIS.
+3. **Dados coletados do LinkedIn** (busca detalhada): Priorize o bloco **Coresignal** quando existir; depois DADOS ADICIONAIS e RESULTADOS DA WEB [n]. Detalhe: (a) link do perfil; (b) experiências profissionais; (c) formação; (d) projetos com URL quando houver; (e) destaques; (f) idiomas; (g) habilidades; (h) recomendações — primeiro DADOS ADICIONAIS, depois [n]; (i) outros links do perfil. Se não houver link de LinkedIn nem Coresignal nem dados identificáveis, escreva: "Nenhum dado de perfil LinkedIn informado ou encontrado nas fontes consultadas."
 4. **Processos judiciais**: Liste TODOS os processos encontrados nos RESULTADOS DA WEB que tenham formato "Processo [número] (TRIBUNAL)" ou que sejam claramente metadados do Datajud/CNJ. Para cada processo: número, tribunal (TST, TRT, STJ, TJSP, TRF etc.), classe processual/órgão/assuntos quando aparecer no resumo, e cite a fonte [n]. Se não houver nenhum processo nas fontes consultadas, escreva: "Nenhum processo judicial encontrado nas bases consultadas (Datajud)."
 5. **Aderência à Área de Interesse**: Com base na área/cargo de interesse declarada pelo candidato e no que foi encontrado na web, informe de forma explícita: (a) se o perfil digital encontrado CONDIZ com a área de interesse declarada; (b) evidências que sustentam ou contradizem (cargos, projetos, formação, habilidades). Se não houver área de interesse informada, escreva "Não informada".
 6. **Sinais de Atentado ou Má Conduta na Internet**: Pesquise nos resultados se há QUALQUER indício relacionado a: fraude, estelionato, golpe, assédio, discurso de ódio, conduta maliciosa, processos ou denúncias judiciais envolvendo uso da internet, tentativas de atentado à honra ou à imagem de terceiros, envolvimento em esquemas ou crimes cibernéticos. Liste cada achado com fonte e classificação de confiança (Alta/Média/Baixa). Se NÃO houver nenhum achado nesse sentido nas fontes consultadas, escreva explicitamente: "Nenhum indício de atentado ou má conduta na internet foi encontrado nas fontes consultadas."
@@ -1161,8 +1351,14 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
     }
   }
 
+  // 0) Coresignal por URL do LinkedIn (se chave + URL): evita buscas web redundantes focadas em LinkedIn
+  const coresignalRecord = await fetchCoresignalEmployeeForLinkedin(data);
+  const coresignalContext = coresignalRecord ? formatCoresignalEmployeeMarkdown(coresignalRecord) : "";
+
   // 1) Busca em estágios: nome/web -> Datajud CPF -> web focada em CPF
-  const { web, site, news } = buildSearchQueries(data);
+  const { web, site, news } = buildSearchQueries(data, {
+    skipLinkedinSerpQueries: Boolean(coresignalRecord),
+  });
   const numInfosimplesQueries = 6;
   const numSerpApiQueries = 6;
   const webForInfosimples = web.slice(0, numInfosimplesQueries);
@@ -1241,8 +1437,19 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
       .join("\n\n") || "Nenhum resultado de busca encontrado na web para este perfil.";
 
   const githubApiContext = await githubEnrichmentPromise;
-  const validationHints = buildLightValidationHints(data, githubApiContext, organicResults);
-  const prompt = buildOSINTPrompt(data, searchResultsContext, githubApiContext, validationHints);
+  const validationHints = buildLightValidationHints(
+    data,
+    githubApiContext,
+    organicResults,
+    Boolean(coresignalRecord)
+  );
+  const prompt = buildOSINTPrompt(
+    data,
+    searchResultsContext,
+    githubApiContext,
+    validationHints,
+    coresignalContext
+  );
   const serperSources: GroundingSource[] = organicResults
     .filter((r) => r.link)
     .map((r) => ({ title: r.title || "Fonte", uri: r.link! }))

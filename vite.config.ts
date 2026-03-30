@@ -18,6 +18,7 @@ export default defineConfig(({ mode }) => {
         'process.env.DATAJUD_API_KEY': JSON.stringify(env.DATAJUD_API_KEY),
         'process.env.SERPAPI_KEY': JSON.stringify(env.SERPAPI_KEY),
         'process.env.GITHUB_TOKEN': JSON.stringify(env.GITHUB_TOKEN),
+        'process.env.CORESIGNAL_API_KEY': JSON.stringify(env.CORESIGNAL_API_KEY),
       },
       resolve: {
         alias: {
