@@ -5,6 +5,10 @@ export interface CandidateData {
   name: string;
   role: string;
   referenceUrls: string[];
+  /** Cidade (opcional). Unifica cadastro manual e JSON do candidato para buscas regionais. */
+  city?: string;
+  /** E-mail (opcional). E-mails com domínio corporativo viram pistas de busca (homônimos). Domínios gratuitos comuns não disparam busca por domínio. */
+  email?: string;
   /** CPF (opcional). Se informado, será usado na análise e em buscas no Datajud. */
   cpf?: string;
   /** UF (opcional), ex.: SP, RJ. Refina buscas web (nome + estado) para maior precisão regional. */

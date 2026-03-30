@@ -468,7 +468,26 @@ async function fetchGithubEnrichmentMarkdown(data: CandidateDataInput): Promise<
       );
       let repos: GithubRepoJson[] = [];
       if (rRes.ok) repos = (await rRes.json()) as GithubRepoJson[];
-      sections.push(formatGithubProfile(login, user, repos));
+      let orgLine = "";
+      const orgsRes = await githubApiGet(`/users/${encodeURIComponent(login)}/orgs?per_page=6`, token);
+      if (orgsRes.ok) {
+        const orgs = (await orgsRes.json()) as Array<{ login?: string }>;
+        const names = orgs.map((o) => o.login).filter(Boolean) as string[];
+        if (names.length) orgLine = `- Organizações públicas (membro): ${names.join(", ")}`;
+      }
+      let eventsLine = "";
+      const evRes = await githubApiGet(`/users/${encodeURIComponent(login)}/events/public?per_page=10`, token);
+      if (evRes.ok) {
+        const events = (await evRes.json()) as Array<{ type?: string; repo?: { name?: string }; created_at?: string }>;
+        const bits = events.slice(0, 8).map((e) => {
+          const repo = e.repo?.name ?? "?";
+          const type = (e.type ?? "").replace("Event", "") || "?";
+          const day = e.created_at?.slice(0, 10) ?? "";
+          return `${day} ${type}→${repo}`;
+        });
+        if (bits.length) eventsLine = `- Eventos públicos recentes (amostra): ${bits.join("; ")}`;
+      }
+      sections.push([formatGithubProfile(login, user, repos), orgLine, eventsLine].filter(Boolean).join("\n"));
     } catch (e) {
       console.warn("GitHub API:", e);
     }
@@ -550,7 +569,16 @@ function capitalizeWords(s: string): string {
 function extractSearchableDomains(urls: string[]): { domain: string; slug?: string; nameFromSlug?: string }[] {
   const seen = new Set<string>();
   const result: { domain: string; slug?: string; nameFromSlug?: string }[] = [];
-  const priorityDomains = ["linkedin.com", "github.com", "lattes.cnpq.br", "behance.net", "medium.com"];
+  const priorityDomains = [
+    "linkedin.com",
+    "github.com",
+    "lattes.cnpq.br",
+    "reclameaqui.com.br",
+    "reclameaqui.com",
+    "jusbrasil.com.br",
+    "behance.net",
+    "medium.com",
+  ];
 
   for (const u of urls) {
     if (!u || !u.trim()) continue;
@@ -640,6 +668,83 @@ function resolveUfForSearch(data: CandidateDataInput): { uf?: string; nomeEstado
   return { uf, nomeEstado };
 }
 
+/** Cidade unificada: formulário manual (data.city) ou JSON do candidato */
+function resolveCityDeclared(data: CandidateDataInput): string {
+  const fromData = data.city?.trim();
+  if (fromData) return fromData.slice(0, 120);
+  const c = data.candidato;
+  if (!c) return "";
+  const raw = c.cidade || c.city;
+  return raw != null && String(raw).trim().length > 0 ? String(raw).trim().slice(0, 120) : "";
+}
+
+const FREE_EMAIL_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "hotmail.com",
+  "outlook.com",
+  "live.com",
+  "msn.com",
+  "yahoo.com",
+  "yahoo.com.br",
+  "icloud.com",
+  "me.com",
+  "protonmail.com",
+  "proton.me",
+  "bol.com.br",
+  "uol.com.br",
+  "terra.com.br",
+  "ig.com.br",
+]);
+
+function isLikelyCorporateEmail(email: string): boolean {
+  const t = email.trim().toLowerCase();
+  const at = t.indexOf("@");
+  if (at < 1) return false;
+  const domain = t.slice(at + 1).replace(/>\s*$/, "").trim();
+  if (!domain || FREE_EMAIL_DOMAINS.has(domain)) return false;
+  return true;
+}
+
+/** Slug do perfil em linkedin.com/in/{slug}/… */
+function extractLinkedinInSlug(raw: string): string | null {
+  const u = raw.trim();
+  if (!u || !/linkedin\.com/i.test(u)) return null;
+  try {
+    const href = /^https?:\/\//i.test(u) ? u : `https://${u}`;
+    const parsed = new URL(href);
+    const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+    if (host !== "linkedin.com") return null;
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const i = parts.indexOf("in");
+    if (i >= 0 && parts[i + 1]) {
+      return parts[i + 1].split("?")[0].split("#")[0] || null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function collectLinkedinInSlugs(data: CandidateDataInput): string[] {
+  const urls: string[] = [...(data.referenceUrls || []).map(String)].filter(Boolean);
+  const c = data.candidato;
+  if (c?.linkedin) urls.push(String(c.linkedin));
+  const socials = (c?.redes_sociais || c?.socials || {}) as { linkedin?: string };
+  if (socials.linkedin) urls.push(String(socials.linkedin));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const url of urls) {
+    const slug = extractLinkedinInSlug(url);
+    if (slug && !seen.has(slug.toLowerCase())) {
+      seen.add(slug.toLowerCase());
+      out.push(slug);
+      if (out.length >= 5) break;
+    }
+  }
+  return out;
+}
+
 /** Monta queries usando TODOS os dados fornecidos: todos os links, experiências, educações, habilidades e currículo */
 function buildSearchQueries(data: CandidateDataInput): {
   web: string[];
@@ -648,6 +753,7 @@ function buildSearchQueries(data: CandidateDataInput): {
 } {
   const { name, role, referenceUrls = [], candidato } = data;
   const { uf, nomeEstado } = resolveUfForSearch(data);
+  const cityDeclared = resolveCityDeclared(data);
   const nome = normalizeNameForSearch(name);
   const urls = referenceUrls.filter((u) => u && u.trim());
   const domains = extractSearchableDomains(urls);
@@ -668,6 +774,16 @@ function buildSearchQueries(data: CandidateDataInput): {
     if (!n || n.length < 3) continue;
     web.push(q(n));
     if (role) web.push(`${q(n)} ${role}`);
+  }
+
+  const emailDeclared = data.email?.trim();
+  if (emailDeclared && isLikelyCorporateEmail(emailDeclared) && priorityNames[0]) {
+    const dom = emailDeclared.split("@")[1]?.toLowerCase().trim();
+    if (dom) {
+      web.push(`${q(priorityNames[0])} ${dom}`);
+      web.push(`"${dom}" ${q(priorityNames[0])}`);
+      web.push(`site:linkedin.com ${q(priorityNames[0])} ${dom}`);
+    }
   }
 
   // —— Nome + plataformas e emprego ——
@@ -816,14 +932,32 @@ function buildSearchQueries(data: CandidateDataInput): {
     }
   }
 
-  // —— Nome + cidade (se houver) para achar perfis locais ——
-  if (candidato && priorityNames.length > 0) {
-    const city = candidato.cidade || candidato.city;
-    if (city && String(city).trim().length > 2) {
-      web.push(`${q(priorityNames[0])} ${String(city).trim()}`);
-      if (nomeEstado) web.push(`${q(priorityNames[0])} ${String(city).trim()} ${nomeEstado}`);
-      if (uf) web.push(`${q(priorityNames[0])} ${String(city).trim()} ${uf}`);
-    }
+  // —— Rodada fechada: slug LinkedIn e login GitHub dos próprios links (menos homônimos) ——
+  for (const slug of collectLinkedinInSlugs(data)) {
+    site.push(`site:linkedin.com/in/${slug}`);
+    site.push(`site:linkedin.com/in "${slug}"`);
+    if (priorityNames[0]) site.push(`site:linkedin.com/in ${q(priorityNames[0])}`);
+  }
+  for (const ghLogin of collectGithubLogins(data)) {
+    site.push(`site:github.com/${ghLogin}`);
+    site.push(`site:github.com "${ghLogin}"`);
+    if (priorityNames[0]) site.push(`site:github.com ${q(priorityNames[0])}`);
+  }
+
+  // —— Nome + cidade (cadastro manual ou candidato) ——
+  if (priorityNames.length > 0 && cityDeclared.length > 2) {
+    web.push(`${q(priorityNames[0])} ${cityDeclared}`);
+    if (nomeEstado) web.push(`${q(priorityNames[0])} ${cityDeclared} ${nomeEstado}`);
+    if (uf) web.push(`${q(priorityNames[0])} ${cityDeclared} ${uf}`);
+    if (role) web.push(`${q(priorityNames[0])} ${role} ${cityDeclared}`);
+  }
+
+  // —— Pistas em agregadores/diretórios BR (cobertura não garantida; apenas hints de busca) ——
+  for (const n of priorityNames.slice(0, 2)) {
+    if (!n || n.length < 3) continue;
+    web.push(`${q(n)} site:lattes.cnpq.br`);
+    web.push(`${q(n)} site:jusbrasil.com.br`);
+    web.push(`${q(n)} (site:reclameaqui.com.br OR site:reclameaqui.com)`);
   }
 
   // —— Estado / UF (formulário ou candidato): nome + estado para precisão regional ——
@@ -860,9 +994,37 @@ function buildSearchQueries(data: CandidateDataInput): {
 }
 
 const SYSTEM_INSTRUCTION =
-  "Você é o analista OSINT Ache um Veterano IA. Dimensões: (1) Consistência — cruze nome, variações e links com a web. (2) Aderência à área de interesse — avalie se o que foi encontrado CONDIZ com a área/cargo declarado pelo candidato. (3) Risco — avalie perigo para a empresa: discurso agressivo, fraude relatada, comportamento incompatível. (4) Atentado/má conduta na internet — relate explicitamente se há indícios de fraude, golpe, assédio, crimes cibernéticos ou atentado à honra; se não houver, diga claramente. SEMPRE classifique evidências: Alta (fonte primária), Média (agregador), Baixa (inferência). Nunca invente — só cite o que está nos resultados da busca.";
+  "Você é o analista OSINT Ache um Veterano IA. Dimensões: (1) Consistência — cruze nome, variações e links com a web. (2) Aderência à área de interesse — avalie se o que foi encontrado CONDIZ com a área/cargo declarado pelo candidato. (3) Risco — avalie perigo para a empresa: discurso agressivo, fraude relatada, comportamento incompatível. (4) Atentado/má conduta na internet — relate explicitamente se há indícios de fraude, golpe, assédio, crimes cibernéticos ou atentado à honra; se não houver, diga claramente. SEMPRE classifique evidências: Alta (fonte primária), Média (agregador), Baixa (inferência). Nunca invente — só cite o que está nos resultados da busca. Separe claramente fatos vindos da API GitHub do que vem só da lista de resultados web [n].";
 
-function buildOSINTPrompt(data: CandidateDataInput, searchResultsContext: string, githubApiContext = ""): string {
+/** Heurísticas baratas pós-agregação (não substituem análise humana). */
+function buildLightValidationHints(data: CandidateDataInput, githubApiMarkdown: string, items: SearchItem[]): string {
+  const hints: string[] = [];
+  const linkBlob = items.map((i) => (i.link || "").toLowerCase()).join(" ");
+
+  const ghExpected = collectGithubLogins(data);
+  for (const login of ghExpected) {
+    const inApi =
+      githubApiMarkdown.includes(`@${login}`) || githubApiMarkdown.toLowerCase().includes(`github.com/${login.toLowerCase()}`);
+    if (inApi) hints.push(`GitHub: o login "${login}" dos links confere com o perfil retornado pela API oficial.`);
+    else if (!githubApiMarkdown.trim())
+      hints.push(`GitHub: havia link para "${login}" mas não houve bloco da API (token, limite ou indisponibilidade).`);
+  }
+
+  for (const slug of collectLinkedinInSlugs(data)) {
+    const needle = `linkedin.com/in/${slug.toLowerCase()}`;
+    if (linkBlob.includes(needle))
+      hints.push(`LinkedIn: o slug /in/${slug} aparece em pelo menos um link entre os resultados agregados.`);
+    else
+      hints.push(
+        `LinkedIn: o slug /in/${slug} não aparece literalmente nos links listados nos resultados — pode constar em outras páginas não capturadas.`
+      );
+  }
+
+  if (hints.length === 0) return "";
+  return `CHECAGENS AUTOMÁTICAS (metadados — use como apoio, não como prova sozinha):\n${hints.map((h) => `- ${h}`).join("\n")}\n`;
+}
+
+function buildOSINTPrompt(data: CandidateDataInput, searchResultsContext: string, githubApiContext = "", validationHints = ""): string {
   const urls = data.referenceUrls?.filter(Boolean) || [];
   const linksBlock =
     urls.length > 0
@@ -887,17 +1049,31 @@ function buildOSINTPrompt(data: CandidateDataInput, searchResultsContext: string
     ufPrompt && nomeEstadoPrompt
       ? `\n- Estado (UF) para refinamento regional: ${ufPrompt} (${nomeEstadoPrompt}). Priorize achados e perfis coerentes com essa localização quando fizer sentido.`
       : ufPrompt
-        ? `\n- Estado (UF) para refinamento regional: ${ufPrompt}. Priorize achados coerentes com essa UF quando fizer sentido.`
+      ? `\n- Estado (UF) para refinamento regional: ${ufPrompt}. Priorize achados coerentes com essa UF quando fizer sentido.`
         : "";
+
+  const cityLine = data.city?.trim();
+  const emailLine = data.email?.trim();
+  const cityEmailBlock =
+    cityLine || emailLine
+      ? `\n- Cidade declarada: ${cityLine || "—"}\n- E-mail declarado: ${emailLine || "—"}`
+      : "";
 
   return `Você é um analista OSINT rigoroso. Sua tarefa é CRUZAR todos os dados fornecidos com os resultados da web.
 
 DADOS DO CANDIDATO:
 - Nome completo: ${data.name}
-- Cargo/Área: ${data.role}${cpfBlock}${stateBlock}
+- Cargo/Área: ${data.role}${cpfBlock}${stateBlock}${cityEmailBlock}
 ${linksBlock}
 ${githubApiContext}
+${validationHints ? `${validationHints}\n` : ""}
 ${nameVariationsBlock}
+
+ORIGEM DOS DADOS — NÃO MISTURE SEM ROTULAR:
+- Bloco "DADOS DO GITHUB (API REST oficial)" = **somente** fatos retornados pela API GitHub (perfil, repos, orgs, eventos públicos). Não extrapole além desse bloco para GitHub.
+- "DADOS ADICIONAIS DO CANDIDATO" = cadastro/plataforma (inclui e-mail e telefone quando fornecidos).
+- "RESULTADOS DA WEB" abaixo = trechos da busca web; ao citar, use **[n]** conforme a lista.
+- Para GitHub: prefira o bloco da API; use [n] só para o que vier explicitamente dos resultados web.
 
 IMPORTANTE: Se existir o bloco "DADOS DO GITHUB (API REST oficial)" acima, use-o como fonte primária para GitHub (bio, local, repos públicos, linguagens). O nome completo (ex: "Samuel Henryk de Souza Ziger") MAL EXISTE na web. A pessoa aparece como "Samuel Ziger" ou "samuel-ziger". O LINK contém a pista: linkedin.com/in/samuel-ziger-237524357 → "samuel-ziger" (antes do número) = "Samuel Ziger" com espaço. É a MESMA PESSOA. Valide cruzando todas as variações.
 
@@ -905,7 +1081,7 @@ ${enrichedContext}
 
 REGRAS PARA RECOMENDAÇÕES LINKEDIN: Se nos "DADOS ADICIONAIS DO CANDIDATO" acima existir a seção "Recomendações recebidas (ex.: LinkedIn)" ou qualquer lista de recomendações, você DEVE reproduzir TODAS essas recomendações na seção "Dados coletados do LinkedIn", no item (h) Recomendações, listando cada uma com autor (e cargo do recomendador quando houver) e trecho. NUNCA escreva "Nenhuma recomendação encontrada" se houver recomendações nos DADOS ADICIONAIS — use-as obrigatoriamente.
 
-RESULTADOS DA WEB (busca ampla: nome, cargo, skills, empresas, perfis, notícias, LinkedIn — recomendações, projetos, idiomas, destaques):
+RESULTADOS DA WEB (trechos indexados — cite com [n]; não confunda com a API GitHub):
 ${searchResultsContext}
 
 CONTEXTO LINKEDIN/PERFIL: A seção "Dados coletados do LinkedIn" deve ser uma BUSCA DETALHADA. Use em primeiro lugar os "DADOS ADICIONAIS" (incluindo recomendações, experiências, projetos, destaques) e depois os "RESULTADOS DA WEB". Para o item (h) Recomendações: se houver "Recomendações recebidas" nos DADOS ADICIONAIS, liste TODAS aqui; senão, use o que encontrar nos resultados da busca; só escreva "nenhuma recomendação encontrada" se não houver em nenhuma das duas fontes.
@@ -931,6 +1107,7 @@ Relatório em Português (Brasil), seguindo EXATAMENTE estas seções:
    - **Alta (Fonte primária)**: encontrada diretamente em perfil oficial, site da empresa, publicação do próprio candidato.
    - **Média (Agregador)**: encontrada em sites de notícias, agregadores, perfis de terceiros.
    - **Baixa (Inferência)**: dedução ou associação sem confirmação direta — use com cautela.
+   Imediatamente abaixo, inclua uma **Tabela Declarado vs encontrado** (Markdown) com colunas: | Campo | Declarado | Encontrado nas fontes | Origem (API GitHub / DADOS ADICIONAIS / [n] / —) | Confiança |. Use **—** quando não houver dado declarado ou nenhum achado. Inclua linhas para: nome, cidade, UF, e-mail ou domínio, slug LinkedIn, login GitHub, CPF (só se declarado), e pelo menos uma linha de experiência ou cargo se houver nos DADOS ADICIONAIS.
 3. **Dados coletados do LinkedIn** (busca detalhada): Seção focada na coleta COMPLETA e DETALHADA de dados vindos do LinkedIn. Liste TUDO que constar do perfil (nos dados do candidato e/ou nos resultados da busca), com o máximo de detalhe: (a) Link do perfil LinkedIn; (b) **Todas as experiências profissionais** — cada uma com cargo/título, empresa e período; (c) Formação acadêmica; (d) **Todos os projetos** — cada projeto com título, descrição e, se houver link (URL) associado ao projeto nos dados ou nos resultados, inclua-o; (e) **Todos os destaques** — liste cada destaque e verifique se há links ou referências a outros sites (inclua-os); (f) Idiomas; (g) Habilidades; (h) **Recomendações** — PRIMEIRO confira nos "DADOS ADICIONAIS DO CANDIDATO" se existe a seção "Recomendações recebidas". Se existir, liste TODAS aqui (autor, cargo do recomendador se houver, trecho). Se não houver nos DADOS ADICIONAIS, use as encontradas nos RESULTADOS DA WEB com fonte [n]. Só escreva "Nenhuma recomendação encontrada nas fontes consultadas" se não houver recomendações em nenhuma das duas fontes. (i) **Todos os outros links** adicionados no perfil (website, blog, portfólio, redes, etc.). Use os "DADOS ADICIONAIS" e os "RESULTADOS DA WEB" para preencher. Cite a fonte [n] quando a informação vier dos resultados da busca. Se não houver link de LinkedIn ou nenhum dado identificável como do perfil LinkedIn, escreva: "Nenhum dado de perfil LinkedIn informado ou encontrado nas fontes consultadas."
 4. **Processos judiciais**: Liste TODOS os processos encontrados nos RESULTADOS DA WEB que tenham formato "Processo [número] (TRIBUNAL)" ou que sejam claramente metadados do Datajud/CNJ. Para cada processo: número, tribunal (TST, TRT, STJ, TJSP, TRF etc.), classe processual/órgão/assuntos quando aparecer no resumo, e cite a fonte [n]. Se não houver nenhum processo nas fontes consultadas, escreva: "Nenhum processo judicial encontrado nas bases consultadas (Datajud)."
 5. **Aderência à Área de Interesse**: Com base na área/cargo de interesse declarada pelo candidato e no que foi encontrado na web, informe de forma explícita: (a) se o perfil digital encontrado CONDIZ com a área de interesse declarada; (b) evidências que sustentam ou contradizem (cargos, projetos, formação, habilidades). Se não houver área de interesse informada, escreva "Não informada".
@@ -1064,7 +1241,8 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
       .join("\n\n") || "Nenhum resultado de busca encontrado na web para este perfil.";
 
   const githubApiContext = await githubEnrichmentPromise;
-  const prompt = buildOSINTPrompt(data, searchResultsContext, githubApiContext);
+  const validationHints = buildLightValidationHints(data, githubApiContext, organicResults);
+  const prompt = buildOSINTPrompt(data, searchResultsContext, githubApiContext, validationHints);
   const serperSources: GroundingSource[] = organicResults
     .filter((r) => r.link)
     .map((r) => ({ title: r.title || "Fonte", uri: r.link! }))

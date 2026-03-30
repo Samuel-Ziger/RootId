@@ -61,6 +61,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
   const [role, setRole] = useState('');
   const [referenceUrls, setReferenceUrls] = useState<string[]>(['']);
   const [cpf, setCpf] = useState('');
+  const [city, setCity] = useState('');
+  const [email, setEmail] = useState('');
   const [stateUf, setStateUf] = useState('');
   const [searchProcessoTrabalhista, setSearchProcessoTrabalhista] = useState(true);
   const [searchOutrosTiposProcesso, setSearchOutrosTiposProcesso] = useState(true);
@@ -72,6 +74,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       setRole(mapped.role);
       setReferenceUrls(mapped.referenceUrls.length > 0 ? mapped.referenceUrls : ['']);
       setCpf(mapped.cpf ? formatCpf(mapped.cpf) : '');
+      setCity(mapped.city ?? '');
+      setEmail(mapped.email ?? '');
       setStateUf(mapped.state ?? '');
     }
   }, [candidato]);
@@ -104,6 +108,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       name: mapped.name,
       role: mapped.role,
       referenceUrls: mapped.referenceUrls.filter((u) => u && u.trim()),
+      ...(city.trim() && { city: city.trim() }),
+      ...(email.trim() && { email: email.trim() }),
       ...(cpfOnlyDigits.length === 11 && { cpf: cpfOnlyDigits }),
       ...(stateUf.length === 2 && { state: stateUf }),
       searchProcessoTrabalhista,
@@ -119,6 +125,8 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
       name,
       role,
       referenceUrls: referenceUrls.filter((u) => u && u.trim()),
+      ...(city.trim() && { city: city.trim() }),
+      ...(email.trim() && { email: email.trim() }),
       ...(cpfOnlyDigits.length === 11 && { cpf: cpfOnlyDigits }),
       ...(stateUf.length === 2 && { state: stateUf }),
       searchProcessoTrabalhista,
@@ -158,7 +166,31 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
               value={cpf}
               onChange={(e) => setCpf(formatCpf(e.target.value))}
             />
-            <p className="text-[10px] text-slate-500 mt-1 ml-1">Se informado, será usado na análise e no Datajud.</p>
+            <p className="text-[10px] text-slate-500 mt-1 ml-1">Opcional. Com nome + UF reduz ruído regional no Datajud; use só quando autorizado.</p>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Cidade — opcional</label>
+            <input
+              type="text"
+              disabled={isLoading || cooldownSeconds > 0}
+              placeholder="Ex: São Paulo"
+              className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 text-white placeholder-slate-500 disabled:opacity-50"
+              value={city}
+              onChange={(e) => setCity(e.target.value)}
+            />
+            <p className="text-[10px] text-slate-500 mt-1 ml-1">Refina buscas (nome + cidade + UF). Mesmo campo do cadastro da plataforma.</p>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">E-mail — opcional</label>
+            <input
+              type="email"
+              disabled={isLoading || cooldownSeconds > 0}
+              placeholder="Preferencial corporativo"
+              className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 text-white placeholder-slate-500 disabled:opacity-50"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            <p className="text-[10px] text-slate-500 mt-1 ml-1">Domínio corporativo gera buscas extras (homônimos). Gmail etc. não disparam busca por domínio.</p>
           </div>
           <div>
             <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Estado (UF) — opcional</label>
@@ -293,6 +325,30 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
           <p className="text-[10px] text-slate-500 mt-1 ml-1">Refina buscas (Serper, SerpApi, InfoSimples) com nome + estado.</p>
         </div>
         <div>
+          <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">Cidade — opcional</label>
+          <input
+            type="text"
+            disabled={isLoading || cooldownSeconds > 0}
+            placeholder="Ex: Curitiba"
+            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 text-white placeholder-slate-500 disabled:opacity-50"
+            value={city}
+            onChange={(e) => setCity(e.target.value)}
+          />
+          <p className="text-[10px] text-slate-500 mt-1 ml-1">Nome + cidade + UF reduz homônimos na web.</p>
+        </div>
+        <div>
+          <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">E-mail — opcional</label>
+          <input
+            type="email"
+            disabled={isLoading || cooldownSeconds > 0}
+            placeholder="ex.: nome@empresa.com.br"
+            className="w-full bg-slate-900/50 border border-slate-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 text-white placeholder-slate-500 disabled:opacity-50"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <p className="text-[10px] text-slate-500 mt-1 ml-1">Com domínio corporativo, o sistema busca também por nome + domínio (Gmail/Hotmail etc. não usam essa pista).</p>
+        </div>
+        <div>
           <div className="flex justify-between items-center mb-1.5 ml-1">
             <label className="block text-xs font-bold text-slate-400 uppercase">Links de referência</label>
             <button
@@ -345,7 +401,7 @@ export const AnalysisForm: React.FC<AnalysisFormProps> = ({ onAnalyze, isLoading
             value={cpf}
             onChange={(e) => setCpf(formatCpf(e.target.value))}
           />
-          <p className="text-[10px] text-slate-500 mt-1 ml-1">Se informado, será usado na análise e em buscas no Datajud.</p>
+          <p className="text-[10px] text-slate-500 mt-1 ml-1">Opcional. Com UF, ajuda a filtrar ruído no Datajud; informe só quando permitido.</p>
         </div>
         <div>
           <p className="block text-xs font-bold text-slate-400 uppercase mb-2 ml-1">Busca por processo (Datajud)</p>

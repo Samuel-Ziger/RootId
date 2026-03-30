@@ -55,11 +55,23 @@ export function mapCandidatoToRootID(
         : candidato.nivel_senioridade || "Não especificado";
 
   const referenceUrls = extractReferenceUrls(candidato);
+  const socials = candidato.redes_sociais || candidato.socials || {};
 
   const cpf = overrides?.cpf ?? candidato.cpf;
   const stateRaw = overrides?.state ?? candidato.state;
   const state =
     stateRaw && typeof stateRaw === "string" ? stateRaw.trim().toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2) : "";
+
+  const cityRaw = overrides?.city ?? candidato.cidade ?? candidato.city;
+  const city =
+    cityRaw != null && String(cityRaw).trim().length > 0 ? String(cityRaw).trim().slice(0, 120) : undefined;
+
+  const emailRaw = overrides?.email ?? candidato.email ?? (typeof socials.email === "string" ? socials.email : undefined);
+  const email =
+    emailRaw && typeof emailRaw === "string" && emailRaw.trim().length > 0
+      ? emailRaw.trim().slice(0, 120)
+      : undefined;
+
   return {
     name: overrides?.name ?? nome,
     role: overrides?.role ?? role,
@@ -69,6 +81,8 @@ export function mapCandidatoToRootID(
         : referenceUrls.length > 0
           ? referenceUrls
           : [""],
+    ...(city && { city }),
+    ...(email && { email }),
     ...(cpf && { cpf: typeof cpf === "string" ? cpf.trim() : String(cpf) }),
     ...(state.length === 2 && { state }),
   };
@@ -89,6 +103,15 @@ export function buildEnrichedContext(candidato: AcheUmVeteranoCandidato): string
 
   const bio = candidato.bio || candidato.about;
   addSection("Biografia", bio);
+
+  const contactEmail =
+    candidato.email || (candidato.redes_sociais || candidato.socials || {}).email;
+  if (contactEmail && typeof contactEmail === "string" && contactEmail.trim()) {
+    addSection("E-mail de contato (cadastro)", contactEmail.trim());
+  }
+  if (candidato.telefone && String(candidato.telefone).trim()) {
+    addSection("Telefone (cadastro)", String(candidato.telefone).trim());
+  }
 
   // Currículo (objeto ou texto) para contexto da análise
   const curriculum = candidato.curriculum;
