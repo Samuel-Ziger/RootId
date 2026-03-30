@@ -752,7 +752,7 @@ function normalizeLinkedinProfileUrlFromAny(raw: string): string | null {
   return `https://www.linkedin.com/in/${slug}`;
 }
 
-function collectLinkedinProfileUrls(data: CandidateDataInput): string[] {
+function collectLinkedinProfileUrls(data: CandidateDataInput, maxUrls = 5): string[] {
   const urls: string[] = [...(data.referenceUrls || []).map(String)].filter(Boolean);
   const c = data.candidato;
   if (c?.linkedin) urls.push(String(c.linkedin));
@@ -765,9 +765,10 @@ function collectLinkedinProfileUrls(data: CandidateDataInput): string[] {
     if (n && !seen.has(n.toLowerCase())) {
       seen.add(n.toLowerCase());
       out.push(n);
+      if (out.length >= maxUrls) break;
     }
   }
-  return out.slice(0, 1);
+  return out;
 }
 
 // --- Coresignal Multi-source Employee API (collect por URL do LinkedIn) ---
@@ -776,15 +777,59 @@ const CORESIGNAL_CDAPI_BASE = "https://api.coresignal.com/cdapi/v2";
 const getCoresignalApiKey = () =>
   (process.env.CORESIGNAL_API_KEY || process.env.VITE_CORESIGNAL_API_KEY || "").trim();
 
-/** Collect employee_multi_source; tenta URL codificada e, em seguida, só o slug. */
-async function fetchCoresignalEmployeeForLinkedin(
-  data: CandidateDataInput
-): Promise<Record<string, unknown> | null> {
+/** Extrai URLs de perfil linkedin.com/in/{slug} a partir de links/títulos/snippets dos resultados de busca. */
+function extractLinkedinProfileUrlsFromSearchItems(items: SearchItem[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const addSlug = (slugRaw: string) => {
+    const slug = decodeURIComponent(slugRaw).split(/[?#]/)[0].trim();
+    if (slug.length < 2) return;
+    const url = `https://www.linkedin.com/in/${slug}`;
+    const key = url.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(url);
+    }
+  };
+  const liRe = /https?:\/\/(www\.)?linkedin\.com\/in\/([^/?#\s'"<>]+)/gi;
+  for (const it of items) {
+    for (const blob of [it.link, it.title, it.snippet]) {
+      if (!blob || typeof blob !== "string") continue;
+      for (const m of blob.matchAll(liRe)) {
+        addSlug(m[2]);
+      }
+    }
+  }
+  return out;
+}
+
+/** Poucas buscas Serper só para achar URL /in/ quando o candidato não informou link. */
+async function discoverLinkedinUrlsViaSerper(data: CandidateDataInput): Promise<string[]> {
+  const name = normalizeNameForSearch(data.name);
+  if (name.length < 3) return [];
+  const qn = name.includes(" ") ? `"${name}"` : name;
+  const role = data.role?.trim();
+  const queries: string[] = [
+    `${qn} site:linkedin.com/in`,
+    `site:linkedin.com/in ${qn}`,
+    `${qn} linkedin perfil`,
+  ];
+  if (role && role.length > 2) queries.push(`${qn} ${role} site:linkedin.com/in`);
+  const organicBlobs: SearchItem[] = [];
+  await Promise.all(
+    queries.map(async (query) => {
+      const res = await searchWithSerper(query, "search");
+      const organic = (res as { organic?: SearchItem[] } | null)?.organic ?? [];
+      for (const o of organic) organicBlobs.push(o);
+    })
+  );
+  return extractLinkedinProfileUrlsFromSearchItems(organicBlobs);
+}
+
+/** Uma chamada collect: URL codificada e, se necessário, só o slug. */
+async function coresignalCollectOneLinkedinUrl(linkedinUrl: string): Promise<Record<string, unknown> | null> {
   const apikey = getCoresignalApiKey();
   if (!apikey) return null;
-  const profileUrls = collectLinkedinProfileUrls(data);
-  if (profileUrls.length === 0) return null;
-  const linkedinUrl = profileUrls[0];
   const slug = extractLinkedinInSlug(linkedinUrl);
   const segments = [encodeURIComponent(linkedinUrl)];
   if (slug) segments.push(encodeURIComponent(slug));
@@ -822,18 +867,61 @@ async function fetchCoresignalEmployeeForLinkedin(
   return null;
 }
 
-/** Texto para o prompt; omite salários e projeções financeiras. */
+type CoresignalCollectResult = {
+  record: Record<string, unknown> | null;
+  callsMade: number;
+};
+
+/** Tenta várias URLs canônicas; respeita limite de chamadas (créditos). */
+async function coresignalCollectFromUrlList(
+  rawUrls: string[],
+  tried: Set<string>,
+  maxCalls: number
+): Promise<CoresignalCollectResult> {
+  let calls = 0;
+  for (const raw of rawUrls) {
+    if (calls >= maxCalls) break;
+    const canon = normalizeLinkedinProfileUrlFromAny(raw) || null;
+    if (!canon) continue;
+    const key = canon.toLowerCase();
+    if (tried.has(key)) continue;
+    tried.add(key);
+    calls += 1;
+    const rec = await coresignalCollectOneLinkedinUrl(canon);
+    if (rec) return { record: rec, callsMade: calls };
+  }
+  return { record: null, callsMade: calls };
+}
+
+/** Campos numéricos/financeiros que não entram no relatório. */
+function isSalaryLikeKey(k: string): boolean {
+  const kl = k.toLowerCase();
+  return (
+    kl.includes("salary") ||
+    kl.includes("bonus") ||
+    kl.startsWith("projected_") ||
+    kl.includes("_revenue") ||
+    kl.includes("funding_round_amount") ||
+    kl.includes("investment") ||
+    kl.includes("annual_revenue")
+  );
+}
+
+/** Texto para o prompt: perfil completo quando a API retornar; omite salários/projeções. */
 function formatCoresignalEmployeeMarkdown(record: Record<string, unknown>): string {
   const lines: string[] = [];
   const s = (v: unknown) => (v != null && String(v).trim() ? String(v).trim() : "");
 
   lines.push("### Coresignal (Multi-source Employee — collect por URL do LinkedIn)");
+  lines.push(
+    "Inclua no relatório **tudo o que aparecer abaixo** (experiências atuais e antigas, formação, certificações, cursos, projetos, prêmios, publicações, organizações, eventos, recomendações, idiomas, skills) — não omita seções presentes."
+  );
   if (s(record.professional_network_url)) lines.push(`- URL perfil (rede profissional): ${s(record.professional_network_url)}`);
   if (s(record.full_name)) lines.push(`- Nome: ${s(record.full_name)}`);
   if (s(record.headline)) lines.push(`- Headline: ${s(record.headline)}`);
   if (s(record.summary)) {
     const sum = s(record.summary);
-    lines.push(`- Resumo: ${sum.slice(0, 1500)}${sum.length > 1500 ? "…" : ""}`);
+    lines.push(`- Resumo: ${sum.slice(0, 4000)}${sum.length > 4000 ? "…" : ""}`);
   }
   if (s(record.location_full)) lines.push(`- Localização: ${s(record.location_full)}`);
   else if (s(record.location_city) || s(record.location_country)) {
@@ -842,7 +930,7 @@ function formatCoresignalEmployeeMarkdown(record: Record<string, unknown>): stri
   if (s(record.website)) lines.push(`- Website: ${s(record.website)}`);
   if (s(record.services)) {
     const sv = s(record.services);
-    lines.push(`- Serviços declarados: ${sv.slice(0, 500)}${sv.length > 500 ? "…" : ""}`);
+    lines.push(`- Serviços declarados: ${sv.slice(0, 800)}${sv.length > 800 ? "…" : ""}`);
   }
   const pc = record.connections_count;
   const fc = record.followers_count;
@@ -852,11 +940,15 @@ function formatCoresignalEmployeeMarkdown(record: Record<string, unknown>): stri
 
   const interests = record.interests;
   if (Array.isArray(interests) && interests.length > 0) {
-    lines.push(`- Interesses: ${interests.slice(0, 25).map((x) => String(x)).join(", ")}`);
+    lines.push(`- Interesses: ${interests.slice(0, 35).map((x) => String(x)).join(", ")}`);
   }
-  const skills = record.inferred_skills;
-  if (Array.isArray(skills) && skills.length > 0) {
-    lines.push(`- Habilidades inferidas: ${skills.slice(0, 45).map((x) => String(x)).join(", ")}`);
+  const skillsInf = record.inferred_skills;
+  const skillsRaw = record.skills;
+  if (Array.isArray(skillsInf) && skillsInf.length > 0) {
+    lines.push(`- Habilidades inferidas: ${skillsInf.slice(0, 60).map((x) => String(x)).join(", ")}`);
+  }
+  if (Array.isArray(skillsRaw) && skillsRaw.length > 0) {
+    lines.push(`- Skills (lista): ${skillsRaw.slice(0, 60).map((x) => String(typeof x === "string" ? x : (x as { name?: string }).name ?? x)).join(", ")}`);
   }
 
   const pemail = record.primary_professional_email;
@@ -864,44 +956,218 @@ function formatCoresignalEmployeeMarkdown(record: Record<string, unknown>): stri
 
   const exp = record.experience;
   if (Array.isArray(exp) && exp.length > 0) {
-    lines.push("### Experiências (Coresignal)");
-    for (const item of exp.slice(0, 22)) {
+    lines.push("### Experiências profissionais — todas (atuais e anteriores) (Coresignal)");
+    for (const item of exp.slice(0, 35)) {
       const e = item as Record<string, unknown>;
       const title = s(e.position_title);
       const comp = s(e.company_name);
       const from = s(e.date_from);
       const to = s(e.date_to);
       const loc = s(e.location);
-      lines.push(`  - ${title || "?"} @ ${comp || "?"} (${from || "?"} – ${to || "?"})${loc ? ` — ${loc}` : ""}`);
+      const act = e.active_experience === 1 || e.active_experience === true ? " [atual]" : "";
+      const desc = s(e.description) || s(e.active_experience_description);
+      let line = `  - ${title || "?"} @ ${comp || "?"} (${from || "?"} – ${to || "?"})${act}${loc ? ` — ${loc}` : ""}`;
+      if (desc) line += `\n    Descrição: ${desc.slice(0, 600)}${desc.length > 600 ? "…" : ""}`;
+      lines.push(line);
     }
   }
 
   const edu = record.education;
   if (Array.isArray(edu) && edu.length > 0) {
-    lines.push("### Formação (Coresignal)");
-    for (const item of edu.slice(0, 12)) {
+    lines.push("### Formação acadêmica (Coresignal)");
+    for (const item of edu.slice(0, 20)) {
       const e = item as Record<string, unknown>;
       const period =
         s(e.date_from) && s(e.date_to)
           ? `${s(e.date_from)} – ${s(e.date_to)}`
           : [e.date_from_year, e.date_to_year].filter((y) => y != null).join(" – ");
+      let line = `  - ${s(e.degree) || s(e.field_of_study) || "Formação"} — ${s(e.institution_name) || "?"} (${period || "?"})`;
+      const desc = s(e.description);
+      if (desc) line += `\n    ${desc.slice(0, 400)}${desc.length > 400 ? "…" : ""}`;
+      lines.push(line);
+    }
+  }
+
+  const certs = record.certifications;
+  if (Array.isArray(certs) && certs.length > 0) {
+    lines.push("### Certificações (Coresignal)");
+    for (const item of certs.slice(0, 40)) {
+      const c = item as Record<string, unknown>;
       lines.push(
-        `  - ${s(e.degree) || s(e.field_of_study) || "Formação"} — ${s(e.institution_name) || "?"} (${period || "?"})`
+        `  - ${s(c.title) || "?"} — ${s(c.issuer) || "?"} (${s(c.date_from) || s(c.date_to) || ""})${s(c.certificate_url) ? ` | ${s(c.certificate_url)}` : ""}${s(c.credential_id) ? ` | credencial: ${s(c.credential_id)}` : ""}`
       );
+    }
+  }
+
+  const courses = record.courses;
+  if (Array.isArray(courses) && courses.length > 0) {
+    lines.push("### Cursos (Coresignal)");
+    for (const item of courses.slice(0, 35)) {
+      const c = item as Record<string, unknown>;
+      lines.push(`  - ${s(c.title) || "?"} — ${s(c.organizer) || s(c.provider) || "?"}`);
+    }
+  }
+
+  const awards = record.awards;
+  if (Array.isArray(awards) && awards.length > 0) {
+    lines.push("### Prêmios / destaques institucionais (awards) (Coresignal)");
+    for (const item of awards.slice(0, 25)) {
+      const a = item as Record<string, unknown>;
+      lines.push(`  - ${s(a.title) || "?"} — ${s(a.issuer) || "?"} (${s(a.date) || ""})${s(a.description) ? `: ${s(a.description).slice(0, 350)}` : ""}`);
+    }
+  }
+
+  const highlights = record.highlights ?? record.featured_items ?? record.featured;
+  if (Array.isArray(highlights) && highlights.length > 0) {
+    lines.push("### Destaques do perfil / featured (Coresignal)");
+    for (const item of highlights.slice(0, 20)) {
+      if (typeof item === "string" && item.trim()) {
+        lines.push(`  - ${item.trim().slice(0, 600)}`);
+        continue;
+      }
+      if (item != null && typeof item === "object") {
+        const h = item as Record<string, unknown>;
+        const title = s(h.title) || s(h.name) || s(h.headline);
+        const url = s(h.url) || s(h.link);
+        const desc = s(h.description) || s(h.text);
+        lines.push(`  - ${title || "Destaque"}${url ? ` | ${url}` : ""}${desc ? `\n    ${desc.slice(0, 400)}` : ""}`);
+      }
+    }
+  }
+
+  const patents = record.patents;
+  if (Array.isArray(patents) && patents.length > 0) {
+    lines.push("### Patentes (Coresignal)");
+    for (const item of patents.slice(0, 15)) {
+      const p = item as Record<string, unknown>;
+      lines.push(
+        `  - ${s(p.title) || "?"} (${s(p.issuer) || s(p.number) || ""})${s(p.url) ? ` | ${s(p.url)}` : ""}${s(p.description) ? `\n    ${s(p.description).slice(0, 350)}` : ""}`
+      );
+    }
+  }
+
+  const volunteer =
+    record.volunteering_experience ?? record.volunteering ?? record.volunteer_experience;
+  if (Array.isArray(volunteer) && volunteer.length > 0) {
+    lines.push("### Voluntariado (Coresignal)");
+    for (const item of volunteer.slice(0, 15)) {
+      const v = item as Record<string, unknown>;
+      lines.push(
+        `  - ${s(v.role) || s(v.title) || "?"} — ${s(v.organization_name) || s(v.company_name) || "?"} (${s(v.date_from)} – ${s(v.date_to)})${s(v.description) ? `\n    ${s(v.description).slice(0, 350)}` : ""}`
+      );
+    }
+  }
+
+  const projects = record.projects;
+  if (Array.isArray(projects) && projects.length > 0) {
+    lines.push("### Projetos (Coresignal)");
+    for (const item of projects.slice(0, 25)) {
+      const p = item as Record<string, unknown>;
+      const name = s(p.name) || s(p.title);
+      lines.push(
+        `  - ${name || "?"} (${s(p.date_from)} – ${s(p.date_to)})${s(p.project_url) ? ` | ${s(p.project_url)}` : ""}${s(p.description) ? `\n    ${s(p.description).slice(0, 500)}` : ""}`
+      );
+    }
+  }
+
+  const pubs = record.publications;
+  if (Array.isArray(pubs) && pubs.length > 0) {
+    lines.push("### Publicações (Coresignal)");
+    for (const item of pubs.slice(0, 20)) {
+      const p = item as Record<string, unknown>;
+      lines.push(`  - ${s(p.title) || "?"} (${s(p.date) || ""})${s(p.publication_url) ? ` | ${s(p.publication_url)}` : ""}${s(p.description) ? `\n    ${s(p.description).slice(0, 400)}` : ""}`);
+    }
+  }
+
+  const orgs = record.organizations;
+  if (Array.isArray(orgs) && orgs.length > 0) {
+    lines.push("### Organizações / voluntariado (Coresignal)");
+    for (const item of orgs.slice(0, 20)) {
+      const o = item as Record<string, unknown>;
+      lines.push(
+        `  - ${s(o.organization_name) || s(o.name) || "?"} — ${s(o.position) || "?"} (${s(o.date_from)} – ${s(o.date_to)})${s(o.description) ? `\n    ${s(o.description).slice(0, 350)}` : ""}`
+      );
+    }
+  }
+
+  const evs = record.events;
+  if (Array.isArray(evs) && evs.length > 0) {
+    lines.push("### Eventos (Coresignal)");
+    for (const item of evs.slice(0, 15)) {
+      const e = item as Record<string, unknown>;
+      lines.push(`  - ${s(e.name) || "?"} — ${s(e.role)} (${s(e.date)}) ${s(e.location) || ""}`);
+    }
+  }
+
+  // Recomendações: vários nomes possíveis no dicionário Coresignal (+ varredura por chave)
+  const recBlocks: unknown[] = [];
+  const recKeyHints = (k: string) => {
+    const low = k.toLowerCase();
+    if (low.includes("salary") || low.includes("endorsement_count")) return false;
+    if (low.includes("recommend") || low.includes("testimonial")) return true;
+    if (low.includes("endorse") && !low.includes("skill")) return true;
+    if (low.includes("reference") && !low.includes("url") && !low.includes("referrer")) return true;
+    return false;
+  };
+  for (const key of Object.keys(record)) {
+    if (isSalaryLikeKey(key)) continue;
+    if (!recKeyHints(key)) continue;
+    const v = record[key];
+    if (Array.isArray(v)) recBlocks.push(...v);
+  }
+  const explicitRec =
+    record.recommendations ??
+    record.received_recommendations ??
+    record.given_recommendations ??
+    record.profile_recommendations ??
+    record.member_recommendations ??
+    record.linkedin_recommendations ??
+    record.endorsements;
+  if (Array.isArray(explicitRec) && explicitRec.length) {
+    for (const x of explicitRec) recBlocks.push(x);
+  }
+  if (recBlocks.length > 0) {
+    lines.push("### Recomendações / referências (Coresignal)");
+    let n = 0;
+    for (const item of recBlocks) {
+      if (n >= 40) break;
+      if (item != null && typeof item === "object") {
+        const r = item as Record<string, unknown>;
+        const author =
+          s(r.author) ||
+          s(r.recommender) ||
+          s(r.reviewer_name) ||
+          s(r.from) ||
+          s(r.name) ||
+          s(r.full_name);
+        const rel = s(r.relationship) || s(r.author_title) || s(r.recommender_title);
+        const text = s(r.text) || s(r.recommendation) || s(r.content) || s(r.message) || s(r.description);
+        if (author || text) {
+          n += 1;
+          lines.push(`  - ${author || "Recomendador ?"}${rel ? ` (${rel})` : ""}: ${text.slice(0, 900)}${text.length > 900 ? "…" : ""}`);
+        }
+      } else if (typeof item === "string" && item.trim()) {
+        n += 1;
+        lines.push(`  - ${item.trim().slice(0, 500)}`);
+      }
     }
   }
 
   const langs = record.languages;
   if (Array.isArray(langs) && langs.length > 0) {
     lines.push(
-      `### Idiomas (Coresignal)\n${langs.slice(0, 15).map((x) => `  - ${typeof x === "string" ? x : JSON.stringify(x)}`).join("\n")}`
+      `### Idiomas (Coresignal)\n${langs.slice(0, 25).map((x) => {
+        if (typeof x === "string") return `  - ${x}`;
+        const o = x as Record<string, unknown>;
+        return `  - ${s(o.name) || s(o.language) || JSON.stringify(x)}${s(o.proficiency) ? ` (${s(o.proficiency)})` : ""}`;
+      }).join("\n")}`
     );
   }
 
   let body = lines.join("\n");
-  const max = 14000;
+  const max = 28000;
   if (body.length > max) body = `${body.slice(0, max)}\n… (truncado para limite do prompt)`;
-  return `\nDADOS DO LINKEDIN / REDE PROFISSIONAL (API Coresignal \`employee_multi_source/collect\` — evidência **Alta** para o que está listado aqui; **não** trate como resultado web [n]):\n${body}\n`;
+  return `\nDADOS DO LINKEDIN / REDE PROFISSIONAL (API Coresignal \`employee_multi_source/collect\` — evidência **Alta**; **não** trate como resultado web [n]):\n${body}\n`;
 }
 
 /** Monta queries usando TODOS os dados fornecidos: todos os links, experiências, educações, habilidades e currículo */
@@ -1351,9 +1617,23 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
     }
   }
 
-  // 0) Coresignal por URL do LinkedIn (se chave + URL): evita buscas web redundantes focadas em LinkedIn
-  const coresignalRecord = await fetchCoresignalEmployeeForLinkedin(data);
-  const coresignalContext = coresignalRecord ? formatCoresignalEmployeeMarkdown(coresignalRecord) : "";
+  // 0) Coresignal: URLs do formulário → descoberta leve (Serper) → após merge, URLs /in/ nos resultados (Serper, SerpApi, Infosimples…)
+  const CORESIGNAL_CAP = 10;
+  const coresignalTried = new Set<string>();
+  let coresignalCalls = 0;
+  const coresignalPull = async (urls: string[]): Promise<Record<string, unknown> | null> => {
+    const { record, callsMade } = await coresignalCollectFromUrlList(
+      urls,
+      coresignalTried,
+      CORESIGNAL_CAP - coresignalCalls
+    );
+    coresignalCalls += callsMade;
+    return record;
+  };
+  let coresignalRecord = await coresignalPull(collectLinkedinProfileUrls(data));
+  if (!coresignalRecord) {
+    coresignalRecord = await coresignalPull(await discoverLinkedinUrlsViaSerper(data));
+  }
 
   // 1) Busca em estágios: nome/web -> Datajud CPF -> web focada em CPF
   const { web, site, news } = buildSearchQueries(data, {
@@ -1427,6 +1707,13 @@ export const performOSINTAnalysis = async (data: CandidateDataInput): Promise<An
     ...cpfSerpApiResults,
     ...cpfInfosimplesResults,
   ]);
+
+  if (!coresignalRecord && coresignalCalls < CORESIGNAL_CAP) {
+    const liFromMergedSearch = extractLinkedinProfileUrlsFromSearchItems(organicResults);
+    coresignalRecord = await coresignalPull(liFromMergedSearch);
+  }
+
+  const coresignalContext = coresignalRecord ? formatCoresignalEmployeeMarkdown(coresignalRecord) : "";
 
   const searchResultsContext =
     organicResults
