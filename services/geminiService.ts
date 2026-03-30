@@ -826,7 +826,66 @@ async function discoverLinkedinUrlsViaSerper(data: CandidateDataInput): Promise<
   return extractLinkedinProfileUrlsFromSearchItems(organicBlobs);
 }
 
-/** Uma chamada collect: URL codificada e, se necessário, só o slug. */
+/** GET collect (opcionalmente com ?fields= conforme doc Coresignal). */
+async function coresignalEmployeeCollectRaw(
+  pathSegment: string,
+  apikey: string,
+  fields?: string[]
+): Promise<
+  { ok: true; json: Record<string, unknown> } | { ok: false; status: number; errBody?: string }
+> {
+  let url = `${CORESIGNAL_CDAPI_BASE}/employee_multi_source/collect/${pathSegment}`;
+  if (fields?.length) {
+    url += `?${fields.map((f) => `fields=${encodeURIComponent(f)}`).join("&")}`;
+  }
+  const res = await fetch(url, {
+    headers: {
+      accept: "application/json",
+      apikey,
+    },
+  });
+  if (!res.ok) {
+    const errBody =
+      res.status === 402 || res.status === 403 ? await res.text().catch(() => "") : "";
+    return { ok: false, status: res.status, errBody };
+  }
+  const json = await res.json();
+  if (json && typeof json === "object") return { ok: true, json: json as Record<string, unknown> };
+  return { ok: false, status: res.status };
+}
+
+function coresignalRecommendationsMissingButCounted(record: Record<string, unknown>): boolean {
+  const list = record.recommendations;
+  const hasList = Array.isArray(list) && list.length > 0;
+  if (hasList) return false;
+  const c = record.recommendations_count;
+  return typeof c === "number" && c > 0;
+}
+
+/** Se o collect completo trouxe recommendations_count > 0 mas lista vazia, repete collect só com fields=recommendations (doc Coresignal). */
+async function coresignalPatchRecommendationsIfNeeded(
+  record: Record<string, unknown>,
+  pathSegment: string,
+  apikey: string
+): Promise<Record<string, unknown>> {
+  if (!coresignalRecommendationsMissingButCounted(record)) return record;
+  try {
+    const sub = await coresignalEmployeeCollectRaw(pathSegment, apikey, [
+      "recommendations",
+      "recommendations_count",
+    ]);
+    if (!sub.ok) return record;
+    const pr = sub.json.recommendations;
+    if (Array.isArray(pr) && pr.length > 0) record.recommendations = pr;
+    const pc = sub.json.recommendations_count;
+    if (typeof pc === "number") record.recommendations_count = pc;
+  } catch (e) {
+    console.warn("Coresignal recommendations patch:", e);
+  }
+  return record;
+}
+
+/** Uma chamada collect: URL codificada e, se necessário, só o slug; reforça recomendações via API quando couber. */
 async function coresignalCollectOneLinkedinUrl(linkedinUrl: string): Promise<Record<string, unknown> | null> {
   const apikey = getCoresignalApiKey();
   if (!apikey) return null;
@@ -835,28 +894,21 @@ async function coresignalCollectOneLinkedinUrl(linkedinUrl: string): Promise<Rec
   if (slug) segments.push(encodeURIComponent(slug));
 
   for (const segment of segments) {
-    const url = `${CORESIGNAL_CDAPI_BASE}/employee_multi_source/collect/${segment}`;
     try {
-      const res = await fetch(url, {
-        headers: {
-          accept: "application/json",
-          apikey,
-        },
-      });
-      if (res.ok) {
-        const json = await res.json();
-        if (json && typeof json === "object") return json as Record<string, unknown>;
-        return null;
+      const first = await coresignalEmployeeCollectRaw(segment, apikey);
+      if (first.ok) {
+        let rec = first.json;
+        rec = await coresignalPatchRecommendationsIfNeeded(rec, segment, apikey);
+        return rec;
       }
-      if (res.status === 401) {
+      if (first.status === 401) {
         console.warn(
           "Coresignal: chave inválida ou sem permissão. Defina CORESIGNAL_API_KEY no .env (header apikey)."
         );
         return null;
       }
-      if (res.status === 402 || res.status === 403) {
-        const t = await res.text().catch(() => "");
-        console.warn("Coresignal:", res.status, t.slice(0, 160));
+      if (first.status === 402 || first.status === 403) {
+        console.warn("Coresignal:", first.status, (first.errBody || "").slice(0, 160));
         return null;
       }
     } catch (e) {
@@ -919,6 +971,9 @@ function formatCoresignalEmployeeMarkdown(record: Record<string, unknown>): stri
   if (s(record.professional_network_url)) lines.push(`- URL perfil (rede profissional): ${s(record.professional_network_url)}`);
   if (s(record.full_name)) lines.push(`- Nome: ${s(record.full_name)}`);
   if (s(record.headline)) lines.push(`- Headline: ${s(record.headline)}`);
+  const recCount = record.recommendations_count;
+  if (typeof recCount === "number")
+    lines.push(`- Recomendações (contagem no payload Coresignal): ${recCount}`);
   if (s(record.summary)) {
     const sum = s(record.summary);
     lines.push(`- Resumo: ${sum.slice(0, 4000)}${sum.length > 4000 ? "…" : ""}`);
@@ -1111,6 +1166,7 @@ function formatCoresignalEmployeeMarkdown(record: Record<string, unknown>): stri
   };
   for (const key of Object.keys(record)) {
     if (isSalaryLikeKey(key)) continue;
+    if (key === "recommendations") continue;
     if (!recKeyHints(key)) continue;
     const v = record[key];
     if (Array.isArray(v)) recBlocks.push(...v);
@@ -1134,6 +1190,7 @@ function formatCoresignalEmployeeMarkdown(record: Record<string, unknown>): stri
       if (item != null && typeof item === "object") {
         const r = item as Record<string, unknown>;
         const author =
+          s(r.referee_full_name) ||
           s(r.author) ||
           s(r.recommender) ||
           s(r.reviewer_name) ||
@@ -1141,16 +1198,30 @@ function formatCoresignalEmployeeMarkdown(record: Record<string, unknown>): stri
           s(r.name) ||
           s(r.full_name);
         const rel = s(r.relationship) || s(r.author_title) || s(r.recommender_title);
-        const text = s(r.text) || s(r.recommendation) || s(r.content) || s(r.message) || s(r.description);
+        const refUrl = s(r.referee_url);
+        const text =
+          s(r.recommendation) ||
+          s(r.text) ||
+          s(r.content) ||
+          s(r.message) ||
+          s(r.description);
         if (author || text) {
           n += 1;
-          lines.push(`  - ${author || "Recomendador ?"}${rel ? ` (${rel})` : ""}: ${text.slice(0, 900)}${text.length > 900 ? "…" : ""}`);
+          const urlBit = refUrl ? ` | perfil quem recomendou: ${refUrl}` : "";
+          lines.push(
+            `  - ${author || "Recomendador ?"}${rel ? ` (${rel})` : ""}${urlBit}: ${text.slice(0, 900)}${text.length > 900 ? "…" : ""}`
+          );
         }
       } else if (typeof item === "string" && item.trim()) {
         n += 1;
         lines.push(`  - ${item.trim().slice(0, 500)}`);
       }
     }
+  } else if (typeof recCount === "number" && recCount > 0) {
+    lines.push("### Recomendações / referências (Coresignal)");
+    lines.push(
+      `  - O payload indica \`recommendations_count: ${recCount}\`, mas a lista textual \`recommendations\` não veio ou está vazia neste collect — possível lacuna da API ou do plano.`
+    );
   }
 
   const langs = record.languages;
@@ -1454,7 +1525,7 @@ function buildLightValidationHints(
 
   if (linkedinFromCoresignal) {
     hints.push(
-      `LinkedIn: perfil carregado via Coresignal (collect por URL); use esse bloco como fonte principal de carreira — buscas Serper focadas em LinkedIn foram omitidas.`
+      `LinkedIn: dados de perfil (incluindo recomendações quando existirem no JSON) via **Coresignal** — trate o bloco Coresignal como fonte **Alta** para o item (h) Recomendações; use RESULTADOS DA WEB [n] só como complemento secundário, não como substituto principal.`
     );
   } else {
     for (const slug of collectLinkedinInSlugs(data)) {
@@ -1525,22 +1596,22 @@ ${validationHints ? `${validationHints}\n` : ""}
 ${nameVariationsBlock}
 
 ORIGEM DOS DADOS — NÃO MISTURE SEM ROTULAR:
-- Bloco "DADOS DO LINKEDIN / REDE PROFISSIONAL (API Coresignal)" = fatos do **collect** Coresignal (\`employee_multi_source\`) pela URL do LinkedIn. Evidência **Alta** para carreira/experiências neste bloco; **não** cite como [n] da lista web.
+- Bloco "DADOS DO LINKEDIN / REDE PROFISSIONAL (API Coresignal)" = fatos do **collect** Coresignal (\`employee_multi_source\`) pela URL do LinkedIn. Evidência **Alta** para carreira, experiências e **recomendações textuais** quando constarem no JSON (campos \`recommendations\`, \`referee_full_name\`, \`recommendation\`, etc., conforme dicionário Coresignal); **não** cite esse bloco como fonte web [n].
 - Bloco "DADOS DO GITHUB (API REST oficial)" = **somente** fatos retornados pela API GitHub (perfil, repos, orgs, eventos públicos). Não extrapole além desse bloco para GitHub.
 - "DADOS ADICIONAIS DO CANDIDATO" = cadastro/plataforma (inclui e-mail e telefone quando fornecidos).
 - "RESULTADOS DA WEB" abaixo = trechos da busca web; ao citar, use **[n]** conforme a lista.
 - Para GitHub: prefira o bloco da API; use [n] só para o que vier explicitamente dos resultados web.
 
-IMPORTANTE: Se existir o bloco Coresignal acima, use-o como fonte **principal** para headline, resumo, experiências e formação profissional do LinkedIn; use "DADOS ADICIONAIS" para recomendações/outros itens que a API não liste. Se existir o bloco "DADOS DO GITHUB (API REST oficial)" acima, use-o como fonte primária para GitHub (bio, local, repos públicos, linguagens). O nome completo (ex: "Samuel Henryk de Souza Ziger") MAL EXISTE na web. A pessoa aparece como "Samuel Ziger" ou "samuel-ziger". O LINK contém a pista: linkedin.com/in/samuel-ziger-237524357 → "samuel-ziger" (antes do número) = "Samuel Ziger" com espaço. É a MESMA PESSOA. Valide cruzando todas as variações.
+IMPORTANTE: Se existir o bloco Coresignal acima, use-o como fonte **principal** para headline, resumo, experiências, formação e **recomendações listadas nesse JSON** do LinkedIn; use "DADOS ADICIONAIS" para recomendações que o candidato digitou na plataforma e que **não** dupliquem o Coresignal. Se existir o bloco "DADOS DO GITHUB (API REST oficial)" acima, use-o como fonte primária para GitHub (bio, local, repos públicos, linguagens). O nome completo (ex: "Samuel Henryk de Souza Ziger") MAL EXISTE na web. A pessoa aparece como "Samuel Ziger" ou "samuel-ziger". O LINK contém a pista: linkedin.com/in/samuel-ziger-237524357 → "samuel-ziger" (antes do número) = "Samuel Ziger" com espaço. É a MESMA PESSOA. Valide cruzando todas as variações.
 
 ${enrichedContext}
 
-REGRAS PARA RECOMENDAÇÕES LINKEDIN: Se nos "DADOS ADICIONAIS DO CANDIDATO" acima existir a seção "Recomendações recebidas (ex.: LinkedIn)" ou qualquer lista de recomendações, você DEVE reproduzir TODAS essas recomendações na seção "Dados coletados do LinkedIn", no item (h) Recomendações, listando cada uma com autor (e cargo do recomendador quando houver) e trecho. NUNCA escreva "Nenhuma recomendação encontrada" se houver recomendações nos DADOS ADICIONAIS — use-as obrigatoriamente.
+REGRAS PARA RECOMENDAÇÕES LINKEDIN (item h): (1) **Prioridade 1 — Coresignal**: se o bloco Coresignal listar recomendações (texto + quem recomendou), reproduza **todas** no relatório com confiança **Alta** — não trate como [n]. (2) **Prioridade 2 — DADOS ADICIONAIS**: se o candidato informou recomendações por escrito, inclua também. (3) **Prioridade 3 — web [n]**: só use RESULTADOS DA WEB para recomendações **não** cobertas por (1) ou (2), com confiança Média ou Baixa. (4) Se \`recommendations_count\` > 0 no Coresignal mas não houver texto de recomendação em nenhuma fonte, diga explicitamente que a API indica contagem mas o texto **não** veio no payload (lacuna do fornecedor), em vez de inventar.
 
 RESULTADOS DA WEB (trechos indexados — cite com [n]; não confunda com a API GitHub):
 ${searchResultsContext}
 
-CONTEXTO LINKEDIN/PERFIL: A seção "Dados coletados do LinkedIn" deve ser detalhada. Ordem de prioridade: (1) bloco **Coresignal** se existir; (2) "DADOS ADICIONAIS" (recomendações, projetos, destaques que o fornecedor não cobriu); (3) "RESULTADOS DA WEB" [n]. Para o item (h) Recomendações: se houver nos DADOS ADICIONAIS, liste TODAS; senão, use os resultados da busca; só escreva "nenhuma recomendação encontrada" se não houver em nenhuma fonte.
+CONTEXTO LINKEDIN/PERFIL: Ordem: (1) **Coresignal**; (2) DADOS ADICIONAIS; (3) RESULTADOS DA WEB [n]. Em (h) Recomendações, siga a mesma ordem; não substitua Coresignal por Serper.
 
 TAREFA – Cruzamento obrigatório:
 1. Cruze NOME (e variações: primeiro+último, slug do link como "samuel-ziger") com cada LINK. O username na URL (ex: /in/samuel-ziger) é o perfil real — valide se os resultados da busca correspondem a essa pessoa.
@@ -1550,7 +1621,7 @@ TAREFA – Cruzamento obrigatório:
 5. Identifique divergências: dados que não batem entre o declarado e o encontrado.
 6. AVALIE RISCO REPUTACIONAL: discurso agressivo, fraude/golpe relatado, comportamento incompatível com o cargo pretendido. Empresas precisam medir "perigo", não só "verdade".
 7. CLASSIFIQUE a confiança de cada evidência citada (Anti-alucinação): só cite evidências com classificação explícita.
-8. LINKEDIN: Na seção "Dados coletados do LinkedIn" liste (a) link do perfil; (b) experiências; (c) formação; (d) projetos com URL se houver em Coresignal, DADOS ADICIONAIS ou [n]; (e) destaques; (f) idiomas; (g) habilidades; (h) recomendações; (i) outros links do perfil. Se houver Coresignal, baseie (b)(c)(f)(g) principalmente nele. Se não houver link LinkedIn nem Coresignal nem dados identificáveis, indique "Nenhum dado de perfil LinkedIn informado ou encontrado nas fontes."
+8. LINKEDIN: Na seção "Dados coletados do LinkedIn" liste (a) link do perfil; (b) experiências; (c) formação; (d) projetos com URL se houver em Coresignal, DADOS ADICIONAIS ou [n]; (e) destaques; (f) idiomas; (g) habilidades; (h) recomendações; (i) outros links do perfil. Se houver Coresignal, baseie (b)(c)(f)(g)(h) principalmente nele. Se não houver link LinkedIn nem Coresignal nem dados identificáveis, indique "Nenhum dado de perfil LinkedIn informado ou encontrado nas fontes."
 9. ÁREA DE INTERESSE: O candidato declarou área/cargo de interesse (veja em "DADOS ADICIONAIS"). Avalie se o que foi encontrado na web CONDIZ com essa área (mesma área técnica, cargos compatíveis, projetos ou formação alinhados). O relatório DEVE ter uma seção dedicada dizendo se o perfil digital encontrado está alinhado ou não à área de interesse declarada.
 10. PROCESSOS JUDICIAIS: Nos RESULTADOS DA WEB podem constar entradas do Datajud (CNJ) com título no formato "Processo [número] (TRIBUNAL)" e link para o CNJ. Liste TODOS esses processos na seção "Processos judiciais" do relatório: número do processo, tribunal (ex.: STJ, TST, TRT1, TJSP, TRF1), classe/órgão/assuntos quando disponíveis no resumo, e link da fonte [n]. Se não houver nenhum processo nas fontes, escreva: "Nenhum processo judicial encontrado nas bases consultadas (Datajud)."
 
@@ -1563,8 +1634,7 @@ Relatório em Português (Brasil), seguindo EXATAMENTE estas seções:
    - **Alta (Fonte primária)**: encontrada diretamente em perfil oficial, site da empresa, publicação do próprio candidato.
    - **Média (Agregador)**: encontrada em sites de notícias, agregadores, perfis de terceiros.
    - **Baixa (Inferência)**: dedução ou associação sem confirmação direta — use com cautela.
-   Imediatamente abaixo, inclua uma **Tabela Declarado vs encontrado** (Markdown) com colunas: | Campo | Declarado | Encontrado nas fontes | Origem (Coresignal / API GitHub / DADOS ADICIONAIS / [n] / —) | Confiança |. Use **—** quando não houver dado declarado ou nenhum achado. Inclua linhas para: nome, cidade, UF, e-mail ou domínio, slug LinkedIn, login GitHub, CPF (só se declarado), e pelo menos uma linha de experiência ou cargo se houver nos DADOS ADICIONAIS.
-3. **Dados coletados do LinkedIn** (busca detalhada): Priorize o bloco **Coresignal** quando existir; depois DADOS ADICIONAIS e RESULTADOS DA WEB [n]. Detalhe: (a) link do perfil; (b) experiências profissionais; (c) formação; (d) projetos com URL quando houver; (e) destaques; (f) idiomas; (g) habilidades; (h) recomendações — primeiro DADOS ADICIONAIS, depois [n]; (i) outros links do perfil. Se não houver link de LinkedIn nem Coresignal nem dados identificáveis, escreva: "Nenhum dado de perfil LinkedIn informado ou encontrado nas fontes consultadas."
+3. **Dados coletados do LinkedIn** (busca detalhada): Priorize o bloco **Coresignal** quando existir; depois DADOS ADICIONAIS e RESULTADOS DA WEB [n]. Detalhe: (a) link do perfil; (b) experiências profissionais; (c) formação; (d) projetos com URL quando houver; (e) destaques; (f) idiomas; (g) habilidades; (h) recomendações — **primeiro Coresignal**, depois DADOS ADICIONAIS, por último [n]; (i) outros links do perfil. Se não houver link de LinkedIn nem Coresignal nem dados identificáveis, escreva: "Nenhum dado de perfil LinkedIn informado ou encontrado nas fontes consultadas."
 4. **Processos judiciais**: Liste TODOS os processos encontrados nos RESULTADOS DA WEB que tenham formato "Processo [número] (TRIBUNAL)" ou que sejam claramente metadados do Datajud/CNJ. Para cada processo: número, tribunal (TST, TRT, STJ, TJSP, TRF etc.), classe processual/órgão/assuntos quando aparecer no resumo, e cite a fonte [n]. Se não houver nenhum processo nas fontes consultadas, escreva: "Nenhum processo judicial encontrado nas bases consultadas (Datajud)."
 5. **Aderência à Área de Interesse**: Com base na área/cargo de interesse declarada pelo candidato e no que foi encontrado na web, informe de forma explícita: (a) se o perfil digital encontrado CONDIZ com a área de interesse declarada; (b) evidências que sustentam ou contradizem (cargos, projetos, formação, habilidades). Se não houver área de interesse informada, escreva "Não informada".
 6. **Sinais de Atentado ou Má Conduta na Internet**: Pesquise nos resultados se há QUALQUER indício relacionado a: fraude, estelionato, golpe, assédio, discurso de ódio, conduta maliciosa, processos ou denúncias judiciais envolvendo uso da internet, tentativas de atentado à honra ou à imagem de terceiros, envolvimento em esquemas ou crimes cibernéticos. Liste cada achado com fonte e classificação de confiança (Alta/Média/Baixa). Se NÃO houver nenhum achado nesse sentido nas fontes consultadas, escreva explicitamente: "Nenhum indício de atentado ou má conduta na internet foi encontrado nas fontes consultadas."
